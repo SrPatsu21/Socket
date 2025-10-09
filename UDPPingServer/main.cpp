@@ -109,9 +109,14 @@ public:
     int run(){
         //* Prepare to receive messages
         this->buffer = new char[this->buffsize]; // dynamic buffer
-        // Save client address
+        // To save client address
         sockaddr_in clientAddress;
         socklen_t clientAddressLen = sizeof(clientAddress);
+
+        // init heartbeat monitor
+        if (heartbeatEnabled) {
+            startHeartbeatMonitor();
+        }
 
         //* Random for network error
         srand(static_cast<unsigned>(time(nullptr)));
@@ -138,8 +143,9 @@ public:
 
                 // Simulate network error (packet loss)
                 int randomValue = rand() % 100;
+
                 if (randomValue < netErrorPercent) {
-                    if (verbose) std::cout << "[NETERR] Simulated packet loss for message: " << buffer << std::endl;
+                    if (verbose) std::cout << "Simulated packet loss for message: " << buffer << std::endl;
                 }else
                 {
                     std::string message(buffer);
@@ -171,6 +177,22 @@ public:
     const char* handlePing(){
         return "Received by server";
     }
+    void startHeartbeatMonitor() {
+        if (!heartbeatEnabled) return;
+
+        std::thread([this]() {
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(this->heartbeatMs));
+
+                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+                if (this->lastHeartbeatTime > 0 && (now - this->lastHeartbeatTime) > this->heartbeatMs) {
+                    std::cout << "No heartbeat received in " << this->heartbeatMs << " ms. Client may be disconnected." << std::endl;
+                    this->lastHeartbeatTime = now;
+                }
+            }
+        }).detach();
+    }
     const char* handleHeartbeat(std::string message){
         size_t firstComma = message.find(',');
         size_t secondComma = message.find(',', firstComma + 1);
@@ -192,6 +214,9 @@ public:
                 this->lostPackets += (N - this->lastN - 1);
             }
             this->lastN = N;
+
+            // record last heartbeat time
+            this->lastHeartbeatTime = now;
 
             // build response dynamically
             static char respBuffer[128];
