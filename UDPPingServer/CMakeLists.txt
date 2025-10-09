@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(main LANGUAGES CXX)
+project(udp_server LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
