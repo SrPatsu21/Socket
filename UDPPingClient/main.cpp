@@ -4,44 +4,82 @@
 #include <sys/socket.h> //create socket
 #include <unistd.h> //posix close(), read(), write()
 
-using namespace std;
+int main() {
 
-int main()
-{
-    //* define server address
+    //* Create a UDP socket
+    // AF_INET → IPv4
+    // SOCK_DGRAM → UDP protocol (unlike SOCK_STREAM for TCP)
+    // 0 → choose default protocol for UDP
+    int clientSocket = socket(AF_INET, SOCK_DGRAM, 0);
 
-    // creating socket
-    // AF_INET: protocolo IPv4
-    // SOCK_STREAM: TCP
-    // 0: use standard protocol (TCP)
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    // verify if socket was created
+    if (clientSocket < 0) {
+        throw std::runtime_error("Error: failed to create socket.");
+        return 1;
+    }
 
-    // specifying the address where server will listen
-    // sin_family = AF_INET: address type IPv4.
-    // sin_port = htons(8080): define the port 8080.
-    // sin_addr.s_addr = INADDR_ANY: accept from any interface.
+    //* Define the server address we want to send to
     sockaddr_in serverAddress;
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(8080);
-    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    memset(&serverAddress, 0, sizeof(serverAddress)); // Clear structure
 
-    // associet socket to the port
-    bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
+    serverAddress.sin_family = AF_INET; // IPv4
+    serverAddress.sin_port = htons(8080); // Host to Network Short (host byte order to network byte order)
+    serverAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1 (localhost)
 
-    // listening to the assigned socket
-    listen(serverSocket, 5);
+    std::cout << "UDP client started. Type messages to send to the server." << std::endl;
+    std::cout << "Type 'exit' to quit.\n" << std::endl;
 
-    // accepting connection request
-    int clientSocket
-        = accept(serverSocket, nullptr, nullptr);
+    // Step 3: Loop to send messages and receive responses
+    while (true) {
+        std::string message;
+        std::cout << "Enter message: ";
+        getline(std::cin, message);
 
-    // recieving data
-    char buffer[1024] = { 0 };
-    recv(clientSocket, buffer, sizeof(buffer), 0);
-    cout << "Message from client: " << buffer << endl;
+        // Exit condition
+        if (message == "exit") {
+            std::cout << "Exiting client..." << std::endl;
+            break;
+        }
 
-    // closing the socket.
-    close(serverSocket);
+        // Step 4: Send message to the server
+        ssize_t bytesSent = sendto(
+            clientSocket,
+            message.c_str(),
+            message.size(),
+            0,
+            (struct sockaddr*)&serverAddress,
+            sizeof(serverAddress)
+        );
 
+        if (bytesSent < 0) {
+            std::cerr << "Error: failed to send message." << std::endl;
+            continue;
+        }
+
+        // Step 5: Wait for server response (optional)
+        char buffer[1024];
+        memset(buffer, 0, sizeof(buffer));
+
+        socklen_t serverLen = sizeof(serverAddress);
+        ssize_t bytesReceived = recvfrom(
+            clientSocket,
+            buffer,
+            sizeof(buffer) - 1, // Reserve space for '\0'
+            0,
+            (struct sockaddr*)&serverAddress,
+            &serverLen
+        );
+
+        if (bytesReceived < 0) {
+            std::cerr << "Error: no response from server." << std::endl;
+            continue;
+        }
+
+        buffer[bytesReceived] = '\0';
+        std::cout << "Server reply: " << buffer << std::endl;
+    }
+
+    //* Close the socket
+    close(clientSocket);
     return 0;
 }
