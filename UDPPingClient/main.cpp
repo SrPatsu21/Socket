@@ -71,7 +71,7 @@ public:
 
 
     void displayInfo() {
-        if (verbose) {
+        if (this->verbose) {
             std::cout << "=== UDP SERVER CONFIG ===" << std::endl;
             std::cout << "Server Address: " << address << std::endl;
             std::cout << "Server Port: " << port << std::endl;
@@ -138,10 +138,8 @@ public:
                 std::string msg(buffer);
 
                 if (msg.rfind("Heartbeat", 0) == 0) {
-                    if (verbose) std::cout << "[HEARTBEAT] " << msg << std::endl;
+                    std::cout << "Heartbeat reply " << msg << std::endl;
                 }else if (msg.rfind("Ping", 0) == 0) {
-                    if (verbose) std::cout << "[RECEIVED PING REPLY] " << msg << std::endl;
-
                     {
                         std::unique_lock<std::mutex> lock(mtx);
                         waitingPing = false;
@@ -159,48 +157,50 @@ public:
         std::thread([this]() {
             while (true) {
 
-                int n = heartbeatCount++;
+                int n = this->heartbeatCount++;
                 long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
                 // Build heartbeat message
                 char msg[128];
                 snprintf(msg, sizeof(msg), "Heartbeat,%d,%lld", n, now);
 
-                sendto(clientSocket,
+                sendto(
+                    this->clientSocket,
                     msg,
                     strlen(msg),
-                    0,
-                    (struct sockaddr *)&serverAddress,
-                    sizeof(serverAddress)
+                    0, // Optional flags (MSG_DONTWAIT for non-blocking)
+                    (struct sockaddr *)&this->serverAddress,
+                    sizeof(this->serverAddress)
                 );
 
-                if (verbose) std::cout << "Sent " << msg << std::endl;
+                if (this->verbose) std::cout << msg << std::endl;
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
+                std::this_thread::sleep_for(std::chrono::milliseconds(this->heartbeatMs));
             }
         }).detach();
     }
 
     void startPingLoop() {
-        if (!pingEnabled) return;
+        if (!this->pingEnabled) return;
 
         std::thread([this]() {
-            for (int i = 0; i < pingTimes && running; i++) {
+            int lostCount = 0;
+            for (int i = 0; i < this->pingTimes && this->running; i++) {
                 const char *msg = "Ping";
                 long long startTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
                 {
-                    std::unique_lock<std::mutex> lock(mtx);
-                    waitingPing = true;
+                    std::unique_lock<std::mutex> lock(this->mtx);
+                    this->waitingPing = true;
                 }
 
                 ssize_t sent = sendto(
                     this->clientSocket,
                     msg,
                     strlen(msg),
-                    0,
-                    (struct sockaddr *)&serverAddress,
-                    sizeof(serverAddress)
+                    0, // Optional flags (MSG_DONTWAIT for non-blocking)
+                    (struct sockaddr *)&this->serverAddress,
+                    sizeof(this->serverAddress)
                 );
 
                 if (sent < 0) {
@@ -208,18 +208,18 @@ public:
                 }else
                 {
                     // wait until reply or timeout
-                    std::unique_lock<std::mutex> lock(mtx);
-                    if (!cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return !waitingPing.load(); })) {
+                    std::unique_lock<std::mutex> lock(this->mtx);
+                    if (!cv.wait_for(lock, std::chrono::milliseconds(this->timeoutMs), [this] { return !this->waitingPing.load(); })) {
                         std::cerr << "Ping " << i + 1 << " Timeout — no reply." << std::endl;
+                        lostCount++;
                     } else {
-                        long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::system_clock::now().time_since_epoch())
-                                                .count();
-                        std::cout << "Ping " << i + 1 << " Reply OK | Latency: "
-                                << (endTime - startTime) << " ms" << std::endl;
+                        long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                        std::cout << "Ping " << i + 1 << " Reply OK | Latency: " << (endTime - startTime) << " ms" << std::endl;
                     }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // interval between pings
                 }
             }
+            std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
         }).detach();
     }
 
