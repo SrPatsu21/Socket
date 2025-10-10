@@ -293,9 +293,5 @@ int main(int argc, char *argv[]) {
 
     server.run();
 
-    //* Close socket
-    // No need
-    server.cleanup();
-
     return 0;
 }
