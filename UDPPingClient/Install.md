@@ -5,7 +5,7 @@ mkdir build
 cd build
 cmake ..
 cmake --build .
-./main.out
+./udp_client
 ```
 
 - if Release

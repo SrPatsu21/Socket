@@ -1,7 +1,7 @@
 /*
  * Setting args
  * Usage: ./udp_server <port> [address] [-v] [--buffsize <bytes>] [--neterr <percent>] [--heartbeat <0|1>] [--heartms <ms>]
- * Exemple: ./udp_server 8080 -v --buffsize 1024 --neterr 25 --heartbeat 1 --heartms 3000
+ * Exemple: ./udp_server 8080 127.0.0.1 -v --buffsize 1024 --neterr 25 --heartbeat 1 --heartms 3000
  */
 
 #include <cstring> // strings
@@ -244,8 +244,6 @@ public:
     }
 };
 
-
-
 int main(int argc, char *argv[]) {
 
     if (argc < 2) {
@@ -262,7 +260,7 @@ int main(int argc, char *argv[]) {
     int buffsize = 1024; // default buffer size
     int netErrorPercent = 0; // default: no simulated packet loss
     bool heartbeatEnabled = false;
-    int heartbeatMs = 3000; // default heartbeat interval
+    int heartbeatMs = 3000; // default heartbeat timeout
 
     //* Parse remaining args
     for (int i = 2; i < argc; ++i) {

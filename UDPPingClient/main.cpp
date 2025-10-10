@@ -1,3 +1,9 @@
+/*
+ * Setting args
+ * Usage: ./udp_client.out <port> [address] [-v] [--buffsize <bytes>] [--ping <0|1>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>]
+ * Exemple: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000 --heartbeat 1 --heartms 1000
+ */
+
 #include <cstring> // strings
 #include <iostream> // output (cout, cin)
 #include <netinet/in.h> // socket struct and utils (sockaddr_in)
@@ -35,7 +41,7 @@ public:
         int timeoutMs = 1000,
         bool pingEnabled = true,
         bool heartbeatEnabled = false,
-        int heartbeatMs = 3000
+        int heartbeatMs = 500
     ) :
         port(port),
         address(address),
@@ -44,12 +50,13 @@ public:
         pingTimes(pingTimes),
         timeoutMs(timeoutMs),
         pingEnabled(pingEnabled),
+        heartbeatMs(heartbeatMs),
         heartbeatEnabled(heartbeatEnabled),
-        heartbeatMs(heartbeatMs)
+        heartbeatCount(0)
     {
-        heartbeatCount = 0;
         displayInfo();
     }
+
 
     void displayInfo() {
         if (verbose) {
@@ -91,8 +98,14 @@ public:
             return 1;
         }
 
+        // set timeout for recvfrom()
+        struct timeval tv;
+        tv.tv_sec = this->timeoutMs / 1000;
+        tv.tv_usec = (this->timeoutMs % 1000) * 1000;
+        setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         std::cout << "UDP client started. Type messages to send to the server." << std::endl;
-        std::cout << "Type 'exit' to quit.\n" << std::endl;
+        return 0;
     }
 
     void startHeartbeatLoop()
@@ -102,93 +115,100 @@ public:
 
         std::thread([this]() {
             while (true) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
 
                 int n = heartbeatCount++;
-                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
                 // Build heartbeat message
                 char msg[128];
                 snprintf(msg, sizeof(msg), "Heartbeat,%d,%lld", n, now);
 
-                sendMessage(msg);
+                sendto(clientSocket,
+                    msg,
+                    strlen(msg),
+                    0,
+                    (struct sockaddr *)&serverAddress,
+                    sizeof(serverAddress)
+                );
 
                 if (verbose) std::cout << "Sent " << msg << std::endl;
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
             }
         }).detach();
     }
 
     void startPingLoop()
     {
-        if (!this->heartbeatEnabled)
+        if (!pingEnabled)
             return;
 
-        std::thread([this]() {
-            while (true) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
+        int lostCount = 0;
+        this->buffer = new char[this->buffsize]; // dynamic buffer
 
-                int n = heartbeatCount++;
-                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+        for (int i = 0; i < pingTimes; i++)
+        {
+            memset(buffer, 0, buffsize); // Clear buffer before receiving new data
+            long long startTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-                // Build heartbeat message
-                char msg[128];
-                snprintf(msg, sizeof(msg), "Heartbeat,%d,%lld", n, now);
+            const char *msg = "Ping";
+            ssize_t sent = sendto(
+                clientSocket,
+                msg,
+                strlen(msg),
+                0,
+                (struct sockaddr *)&this->serverAddress,
+                sizeof(this->serverAddress)
+            );
 
-                sendMessage(msg);
-
-                if (verbose) std::cout << "Sent " << msg << std::endl;
+            if (sent < 0)
+            {
+                std::cerr << "Error: failed to send Ping." << std::endl;
+                lostCount++;
+                continue;
             }
-        }).detach();
-    }
-    int sendMessage(const std::string &message)
-    {
-        ssize_t bytesSent = sendto(
-            clientSocket,
-            message.c_str(),
-            message.size(),
-            0,
-            (struct sockaddr *)&serverAddress,
-            sizeof(serverAddress));
 
-        if (bytesSent < 0)
-        {
-            std::cerr << "Error: failed to send message." << std::endl;
-            return 1;
+            socklen_t serverLen = sizeof(this->serverAddress);
+            ssize_t bytesReceived = recvfrom(
+                this->clientSocket,
+                this->buffer,
+                sizeof(this->buffer) - 1,
+                0,
+                (struct sockaddr *)&serverAddress,
+                &serverLen
+            );
+
+            if (bytesReceived < 0)
+            {
+                std::cerr << "PING " << i + 1 << " Timeout — no reply." << std::endl;
+                lostCount++;
+            }
+            else
+            {
+                this->buffer[bytesReceived] = '\0';
+                long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                long long latency = endTime - startTime;
+
+                std::cout << "[PING " << i + 1 << "] Reply: \"" << this->buffer << "\" | Latency: " << latency << " ms" << std::endl;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // interval between pings, more interative
         }
 
-        char recvBuffer[1024];
-        memset(recvBuffer, 0, sizeof(recvBuffer));
-
-        socklen_t serverLen = sizeof(serverAddress);
-        ssize_t bytesReceived = recvfrom(
-            clientSocket,
-            recvBuffer,
-            sizeof(recvBuffer) - 1,
-            0,
-            (struct sockaddr *)&serverAddress,
-            &serverLen);
-
-        if (bytesReceived > 0)
-        {
-            recvBuffer[bytesReceived] = '\0';
-            std::cout << "Server reply: " << recvBuffer << std::endl;
-        }
-        else
-        {
-            std::cerr << "No response from server." << std::endl;
-        }
+        std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
     }
 
     int run()
     {
-        if (heartbeatEnabled) {
-            startHeartbeatLoop();
-        }
-        if (PingEnabled)
+        if (heartbeatEnabled) startHeartbeatLoop();
+
+        if (pingEnabled) startPingLoop();
+
+        // If only heartbeat, keep main thread alive
+        if (heartbeatEnabled && !pingEnabled)
         {
-            startPingLoop();
+            while (true)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
         return 0;
@@ -210,39 +230,49 @@ int main(int argc, char *argv[])
 {
     if (argc < 2)
     {
-        std::cerr << "Usage: " << argv[0] << " <port> [address] [-v] [--buffsize <bytes>] [--heartbeat <0|1>] [--heartms <ms>]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <port> [address] [-v] [--buffsize <bytes>] [--ping <0|1>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>]" << std::endl;
         return 1;
     }
 
+    //* Required: port
     int port = std::stoi(argv[1]);
-    std::string address = "127.0.0.1";
-    bool verbose = false;
-    int buffsize = 1024;
-    bool heartbeatEnabled = false;
-    int heartbeatMs = 3000;
 
+    //* Optional args
+    std::string address = "0.0.0.0"; // all interfaces by default
+    bool verbose = false;
+    int buffsize = 1024; // default buffer size
+    int pingTimes = 10; // N pings
+    int timeoutMs = 1000; // time to wait for response
+    bool pingEnabled = true;
+    bool heartbeatEnabled = false;
+    int heartbeatMs = 500; // default heartbeat interval
+
+    //* Parse remaining args
     for (int i = 2; i < argc; ++i)
     {
         std::string arg = argv[i];
+
         if (arg == "-v")
             verbose = true;
         else if (arg == "--buffsize" && i + 1 < argc)
             buffsize = std::stoi(argv[++i]);
+        else if (arg == "--ping" && i + 1 < argc)
+            pingEnabled = (std::stoi(argv[++i]) != 0);
+        else if (arg == "--pingtimes" && i + 1 < argc)
+            pingTimes = std::stoi(argv[++i]);
+        else if (arg == "--timeout" && i + 1 < argc)
+            timeoutMs = std::stoi(argv[++i]);
         else if (arg == "--heartbeat" && i + 1 < argc)
             heartbeatEnabled = (std::stoi(argv[++i]) != 0);
         else if (arg == "--heartms" && i + 1 < argc)
             heartbeatMs = std::stoi(argv[++i]);
-        else if (address == "127.0.0.1" && arg != "-v")
+        else if (address == "127.0.0.1" && arg[0] != '-')
             address = arg;
     }
 
-    UDPSocketClient client(port, address, verbose, buffsize, heartbeatEnabled, heartbeatMs);
+    UDPSocketClient client( port, address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs);
 
-    if (client.createSocket() > 0) {
-        return 1;
-    }
-    if (client.run() > 0) {
-        return 1;
-    }
-    return 0;
+    if (client.createSocket() != 0) return 1;
+
+    return client.run();
 }
