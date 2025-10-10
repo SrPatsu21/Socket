@@ -175,7 +175,7 @@ public:
     }
 
     const char* handlePing(){
-        return "Received by server";
+        return "Ping reply";
     }
     void startHeartbeatMonitor() {
         if (!heartbeatEnabled) return;

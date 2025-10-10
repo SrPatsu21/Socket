@@ -12,6 +12,7 @@
 #include <sys/socket.h> // create socket
 #include <unistd.h> // posix close(), read(), write()
 #include <arpa/inet.h> // inet_pton()
+#include <condition_variable>
 #include <thread> // std::thread for heartbeat
 #include <chrono> // std::chrono for time
 #include <atomic> // atomic types ensure safe access in multithreaded
@@ -29,10 +30,17 @@ private:
     int heartbeatMs;
     bool heartbeatEnabled;
     std::atomic<int> heartbeatCount;
+
     // socket
     int clientSocket;
     char *buffer;
     sockaddr_in serverAddress;
+
+
+    std::atomic<bool> running;
+    std::atomic<bool> waitingPing;
+    std::mutex mtx;
+    std::condition_variable cv;
 public:
     UDPSocketClient(
         int port,
@@ -54,7 +62,9 @@ public:
         pingEnabled(pingEnabled),
         heartbeatMs(heartbeatMs),
         heartbeatEnabled(heartbeatEnabled),
-        heartbeatCount(0)
+        heartbeatCount(0),
+        running(true),
+        waitingPing(false)
     {
         displayInfo();
     }
@@ -100,20 +110,51 @@ public:
             return 1;
         }
 
-        // set timeout for recvfrom()
-        struct timeval tv;
-        tv.tv_sec = this->timeoutMs / 1000;
-        tv.tv_usec = (this->timeoutMs % 1000) * 1000;
-        setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
         std::cout << "UDP client started. Type messages to send to the server." << std::endl;
         return 0;
     }
 
+
+    void receiveHandler() {
+        this->buffer = new char[this->buffsize]; // dynamic buffer
+
+        socklen_t serverLen = sizeof(serverAddress);
+
+        while (this->running) {
+            memset(buffer, 0, this->buffsize);
+            ssize_t bytesReceived = recvfrom(
+                this->clientSocket,
+                this->buffer,
+                sizeof(this->buffer) - 1,
+                0,
+                (struct sockaddr *)&this->serverAddress,
+                &serverLen
+            );
+
+            if (bytesReceived < 0) {
+                std::cerr << "Error receiving data." << std::endl;
+            } else {
+                buffer[bytesReceived] = '\0';
+                std::string msg(buffer);
+
+                if (msg.rfind("Heartbeat", 0) == 0) {
+                    if (verbose) std::cout << "[HEARTBEAT] " << msg << std::endl;
+                }else if (msg.rfind("Ping", 0) == 0) {
+                    if (verbose) std::cout << "[RECEIVED PING REPLY] " << msg << std::endl;
+
+                    {
+                        std::unique_lock<std::mutex> lock(mtx);
+                        waitingPing = false;
+                    }
+                    cv.notify_all(); // release ping loop
+                }
+            }
+        }
+    }
+
     void startHeartbeatLoop()
     {
-        if (!this->heartbeatEnabled)
-            return;
+        if (!this->heartbeatEnabled) return;
 
         std::thread([this]() {
             while (true) {
@@ -140,95 +181,55 @@ public:
         }).detach();
     }
 
-    void startPingLoop()
-    {
-        if (!pingEnabled)
-            return;
+    void startPingLoop() {
+        if (!pingEnabled) return;
 
-        int lostCount = 0;
-        this->buffer = new char[this->buffsize]; // dynamic buffer
+        std::thread([this]() {
+            for (int i = 0; i < pingTimes && running; i++) {
+                const char *msg = "Ping";
+                long long startTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-        for (int i = 0; i < pingTimes; i++)
-        {
-            memset(buffer, 0, buffsize); // Clear buffer before receiving new data
-            long long startTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-
-            const char *msg = "Ping";
-            ssize_t sent = sendto(
-                clientSocket,
-                msg,
-                strlen(msg),
-                0,
-                (struct sockaddr *)&this->serverAddress,
-                sizeof(this->serverAddress)
-            );
-
-            if (sent < 0)
-            {
-                std::cerr << "Error: failed to send Ping." << std::endl;
-                lostCount++;
-                continue;
-            }
-
-            // Wait for reply or heartbeat
-            socklen_t serverLen = sizeof(this->serverAddress);
-            ssize_t bytesReceived = recvfrom(
-                this->clientSocket,
-                this->buffer,
-                this->buffsize - 1,
-                0,
-                (struct sockaddr *)&this->serverAddress,
-                &serverLen
-            );
-
-            if (bytesReceived < 0)
-            {
-                std::cerr << "PING " << i + 1 << " Timeout — no reply." << std::endl;
-                lostCount++;
-            }
-            else
-            {
-                this->buffer[bytesReceived] = '\0'; // Null-terminate message
-                std::string msg(this->buffer);
-
-                // Handle heartbeat messages
-                if (msg.rfind("Heartbeat", 0) == 0) // starts with "Heartbeat"
                 {
-                    if (verbose)
-                        std::cout << "[HEARTBEAT] " << msg << std::endl;
-
-                    // do NOT count it as a ping reply
-                    i--; // so the same ping index repeats
-                    continue;
+                    std::unique_lock<std::mutex> lock(mtx);
+                    waitingPing = true;
                 }
 
-                // Otherwise, it's a Ping reply → measure latency
-                long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                long long latency = endTime - startTime;
+                ssize_t sent = sendto(
+                    this->clientSocket,
+                    msg,
+                    strlen(msg),
+                    0,
+                    (struct sockaddr *)&serverAddress,
+                    sizeof(serverAddress)
+                );
 
-                std::cout << "PING " << i + 1 << " Reply: \"" << msg << "\" | Latency: " << latency << " ms" << std::endl;
+                if (sent < 0) {
+                    std::cerr << "Ping " << i + 1 << " Failed to send." << std::endl;
+                }else
+                {
+                    // wait until reply or timeout
+                    std::unique_lock<std::mutex> lock(mtx);
+                    if (!cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return !waitingPing.load(); })) {
+                        std::cerr << "Ping " << i + 1 << " Timeout — no reply." << std::endl;
+                    } else {
+                        long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch())
+                                                .count();
+                        std::cout << "Ping " << i + 1 << " Reply OK | Latency: "
+                                << (endTime - startTime) << " ms" << std::endl;
+                    }
+                }
             }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // small delay between pings
-        }
-
-        std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
+        }).detach();
     }
 
-    int run()
-    {
-        if (heartbeatEnabled) startHeartbeatLoop();
+    int run() {
+        std::thread receiver(&UDPSocketClient::receiveHandler, this);
+        if (this->heartbeatEnabled) startHeartbeatLoop();
+        if (this->pingEnabled) startPingLoop();
 
-        if (pingEnabled) startPingLoop();
-
-        // If only heartbeat, keep main thread alive
-        if (heartbeatEnabled && !pingEnabled)
-        {
-            while (true)
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
-        return 0;
+        receiver.join();
+        return 1;
     }
 
     ~UDPSocketClient(){
