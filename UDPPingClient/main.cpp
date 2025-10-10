@@ -2,6 +2,8 @@
  * Setting args
  * Usage: ./udp_client.out <port> [address] [-v] [--buffsize <bytes>] [--ping <0|1>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>]
  * Exemple: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000 --heartbeat 1 --heartms 1000
+ * Exemple just ping: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000
+ * Exemple just hearbeat: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 0 --heartbeat 1 --heartms 1000
  */
 
 #include <cstring> // strings
@@ -168,13 +170,14 @@ public:
                 continue;
             }
 
+            // Wait for reply or heartbeat
             socklen_t serverLen = sizeof(this->serverAddress);
             ssize_t bytesReceived = recvfrom(
                 this->clientSocket,
                 this->buffer,
-                sizeof(this->buffer) - 1,
+                this->buffsize - 1,
                 0,
-                (struct sockaddr *)&serverAddress,
+                (struct sockaddr *)&this->serverAddress,
                 &serverLen
             );
 
@@ -185,14 +188,28 @@ public:
             }
             else
             {
-                this->buffer[bytesReceived] = '\0';
+                this->buffer[bytesReceived] = '\0'; // Null-terminate message
+                std::string msg(this->buffer);
+
+                // Handle heartbeat messages
+                if (msg.rfind("Heartbeat", 0) == 0) // starts with "Heartbeat"
+                {
+                    if (verbose)
+                        std::cout << "[HEARTBEAT] " << msg << std::endl;
+
+                    // do NOT count it as a ping reply
+                    i--; // so the same ping index repeats
+                    continue;
+                }
+
+                // Otherwise, it's a Ping reply → measure latency
                 long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 long long latency = endTime - startTime;
 
-                std::cout << "[PING " << i + 1 << "] Reply: \"" << this->buffer << "\" | Latency: " << latency << " ms" << std::endl;
+                std::cout << "PING " << i + 1 << " Reply: \"" << msg << "\" | Latency: " << latency << " ms" << std::endl;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // interval between pings, more interative
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // small delay between pings
         }
 
         std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
