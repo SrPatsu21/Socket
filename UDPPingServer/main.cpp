@@ -149,10 +149,15 @@ public:
                 }else
                 {
                     std::string message(buffer);
-                    if (verbose) std::cout << "Message from client: " << message << std::endl;
+                    if (this->verbose) std::cout << "Message from client: " << message << std::endl;
 
                     // send a response back to client
                     const char* response = "Unknown command"; // default response
+
+                    int randomDelay = 10 + (rand() % 20);
+                    if (this->verbose) std::cout << "Simulating delay: " << randomDelay << " ms" << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(randomDelay));
+
 
                     if (message == "Ping") {
                         response = handlePing();

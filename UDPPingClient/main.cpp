@@ -184,6 +184,9 @@ public:
         if (!this->pingEnabled) return;
 
         std::thread([this]() {
+            long long minRTT = 90000;
+            long long maxRTT = 0;
+            double averageRTT = 0;
             int lostCount = 0;
             for (int i = 0; i < this->pingTimes && this->running; i++) {
                 const char *msg = "Ping";
@@ -214,12 +217,17 @@ public:
                         lostCount++;
                     } else {
                         long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                        std::cout << "Ping " << i + 1 << " Reply OK | Latency: " << (endTime - startTime) << " ms" << std::endl;
+                        long long latency = endTime - startTime;
+                        std::cout << "Ping " << i + 1 << " Reply OK | Latency: " << latency << " ms" << std::endl;
+                        averageRTT += latency;
+                        if (minRTT > latency) minRTT = latency;
+                        if (maxRTT < latency) maxRTT = latency;
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(500)); // interval between pings
                 }
             }
             std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
+            std::cout << "Max latency:" << maxRTT << " Min latency:" << minRTT << " average latency:" << (averageRTT/(this->pingTimes-lostCount)) << std::endl;
         }).detach();
     }
 
