@@ -1,9 +1,9 @@
 /*
  * Setting args
- * Usage: ./udp_client.out <port> [address] [-v] [--buffsize <bytes>] [--ping <0|1>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>]
- * Exemple: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000 --heartbeat 1 --heartms 1000
- * Exemple just ping: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000
- * Exemple just hearbeat: ./udp_client.out 8080 127.0.0.1 -v --buffsize 1024 --ping 0 --heartbeat 1 --heartms 1000
+ * Usage: ./udp_client <port> [address] [-v] [--buffsize <bytes>] [--ping <0|1>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>]
+ * Exemple: ./udp_client 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000 --heartbeat 1 --heartms 1000
+ * Exemple just ping: ./udp_client 8080 127.0.0.1 -v --buffsize 1024 --ping 1 --pingtimes 10 --timeout 1000
+ * Exemple just hearbeat: ./udp_client 8080 127.0.0.1 -v --buffsize 1024 --ping 0 --heartbeat 1 --heartms 1000
  */
 
 #include <cstring> // strings
@@ -17,7 +17,7 @@
 #include <chrono> // std::chrono for time
 #include <atomic> // atomic types ensure safe access in multithreaded
 
-class UDPSocketClient
+class SMTPSocketClient
 {
 private:
     int port;
@@ -42,7 +42,7 @@ private:
     std::mutex mtx;
     std::condition_variable cv;
 public:
-    UDPSocketClient(
+    SMTPSocketClient(
         int port,
         std::string address = "127.0.0.1",
         bool verbose = false,
@@ -232,7 +232,7 @@ public:
     }
 
     int run() {
-        std::thread receiver(&UDPSocketClient::receiveHandler, this);
+        std::thread receiver(&SMTPSocketClient::receiveHandler, this);
         if (this->heartbeatEnabled) startHeartbeatLoop();
         if (this->pingEnabled) startPingLoop();
 
@@ -240,7 +240,7 @@ public:
         return 1;
     }
 
-    ~UDPSocketClient(){
+    ~SMTPSocketClient(){
         cleanup();
     };
 
@@ -296,7 +296,7 @@ int main(int argc, char *argv[])
             address = arg;
     }
 
-    UDPSocketClient client( port, address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs);
+    SMTPSocketClient client( port, address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs);
 
     if (client.createSocket() != 0) return 1;
 
