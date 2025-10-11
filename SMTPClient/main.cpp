@@ -10,12 +10,18 @@
 #include <sys/socket.h> // create socket
 #include <unistd.h> // posix close(), read(), write()
 #include <arpa/inet.h> // inet_pton()
+#include <string> // more string utils
+#include <cerrno> // print message immediately - unbuffered
 
 class SMTPSocketClient
 {
 private:
     int port;
     std::string address;
+    std::string from;
+    std::string to;
+    std::string subject;
+    std::string body;
     bool verbose;
     int buffsize;
 
@@ -23,21 +29,63 @@ private:
     int clientSocket;
     char *buffer;
     sockaddr_in serverAddress;
+
+    std::string readResponse() {
+        std::string resp;
+        ssize_t n = recv(this->clientSocket, this->buffer, this->buffsize - 1, 0);
+        if (n <= 0) return "ERROR or closed connection\n";
+        buffer[n] = '\0';
+        resp.assign(buffer, (size_t)n);
+        return resp;
+    }
+
+    int sendAll(const std::string &data) {
+        ssize_t total = 0;
+        ssize_t len = (ssize_t)data.size();
+        //loop to send all data
+        while (total < len) {
+            ssize_t sent = send(this->clientSocket, data.c_str() + total, len - total, 0);
+            if (sent <= 0) {
+                std::cerr << "Send error: " << std::strerror(errno) << "\n";
+                return 1;
+            }
+            total += sent;
+        }
+        return 0;
+    }
+
+    int sendCommand(const std::string &cmd) {
+        if (verbose) std::cout << "C: " + cmd << std::endl;
+        if (sendAll(cmd)) return 1;
+        std::string reply = readResponse();
+        std::cout << "S: " << reply;
+        return 0;
+    }
+
 public:
     SMTPSocketClient(
         int port,
-        std::string address = "127.0.0.1",
+        std::string &address,
+        std::string &from,
+        std::string &to,
+        std::string &subject,
+        std::string &body,
         bool verbose = false,
         int buffsize = 1024
     ) :
         port(port),
         address(address),
+        from(from),
+        to(to),
+        subject(subject),
+        body(body),
         verbose(verbose),
-        buffsize(buffsize)
+        buffsize(buffsize),
+        clientSocket(-1)
     {
+        buffer = new char[buffsize];
         displayInfo();
     }
-
 
     void displayInfo() {
         if (this->verbose) {
@@ -80,6 +128,51 @@ public:
         return 0;
     }
 
+    int connectServer() {
+
+        if (connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) {
+            std::cerr << "Connect error: " << std::strerror(errno) << "\n";
+            return 1;
+        }
+
+        std::cout << "Connected to " << address << ":" << port << "\n";
+        std::cout << "Server: " << readResponse(); // banner
+        return 0;
+    }
+
+    int run() {
+        if (connectServer()) return 1;
+
+        // EHLO
+        if (!sendCommand("EHLO localhost\r\n")) return false;
+
+        // MAIL FROM
+        if (!sendCommand("MAIL FROM:<" + from + ">\r\n")) return false;
+
+        // RCPT TO
+        if (!sendCommand("RCPT TO:<" + to + ">\r\n")) return false;
+
+        // DATA
+        if (!sendCommand("DATA\r\n")) return false;
+
+        // Message headers + body
+        std::string msg = "Subject: " + subject + "\r\n";
+        msg += "From: <" + from + ">\r\n";
+        msg += "To: <" + to + ">\r\n";
+        msg += "\r\n" + body + "\r\n";
+        msg += ".\r\n";
+
+        std::cout << "C (message data):\n" << msg;
+        if (sendAll(msg)) return 1;
+
+        std::cout << "S: " << readResponse();
+
+        // QUIT
+        if (!sendCommand("QUIT\r\n")) return false;
+
+        return 0;
+    }
+
     ~SMTPSocketClient(){
         cleanup();
     };
@@ -89,42 +182,27 @@ public:
         delete[] this->buffer;
         this->buffer = nullptr;
     }
-    int run(){
-
-    }
 };
-
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2)
+    if (argc < 7)
     {
-        std::cerr << "Usage: " << argv[0] << " <port> [address] [-v] [--buffsize <bytes>]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <port> <server_ip> <from_email> <to_email> <subject> <body> [-v]" << std::endl;
         return 1;
     }
 
-    //* Required: port
+    //* Required args
     int port = std::stoi(argv[1]);
-
+    std::string server = argv[2];
+    std::string from = argv[3];
+    std::string to = argv[4];
+    std::string subject = argv[5];
+    std::string body = argv[6];
     //* Optional args
-    std::string address = "0.0.0.0"; // all interfaces by default
-    bool verbose = false;
-    int buffsize = 1024; // default buffer size
+    bool verbose = (argc > 7 && std::string(argv[7]) == "-v");
 
-    //* Parse remaining args
-    for (int i = 2; i < argc; ++i)
-    {
-        std::string arg = argv[i];
-
-        if (arg == "-v")
-            verbose = true;
-        else if (arg == "--buffsize" && i + 1 < argc)
-            buffsize = std::stoi(argv[++i]);
-        else if (address == "127.0.0.1" && arg[0] != '-')
-            address = arg;
-    }
-
-    SMTPSocketClient client( port, address, verbose, buffsize);
+    SMTPSocketClient client(port, server, from, to, subject, body, verbose);
 
     if (client.createSocket() != 0) return 1;
 
