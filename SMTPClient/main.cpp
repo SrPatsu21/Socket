@@ -1,6 +1,7 @@
 /*
  * Usage: ./smtp_client <port> <server_url> <from_email> <to_email> <subject> <body> [-v] [--buffsize <bytes>]
- * Example: ./smtp_client 25 temp-mail.org sender@example.com misop24035@lorkex.com "Hello" "This is a test." -v --buffsize 2048
+ * Example: ./smtp_client 25 temp-mail.org sender@example.com hosidav674@gamegta.com "Hello" "This is a test." -v --buffsize 2048
+ * Example: ./smtp_client 25 localhost sender@example.com recipient@example.com "Hello" "This is a test" -v --buffsize 2048
  */
 
 #include <cstring> // strings
@@ -95,7 +96,8 @@ public:
             std::cout << "From: " << from << std::endl;
             std::cout << "To: " << to << std::endl;
             std::cout << "Buffer size: " << buffsize << " bytes" << std::endl;
-            std::cout << "Verbose mode enabled\n" << std::endl;
+            std::cout << "Verbose mode enabled" << std::endl;
+            std::cout << "==========================" << std::endl << std::endl;
         }
     }
 
@@ -103,7 +105,8 @@ public:
         //* Create socket
         // AF_INET → IPv4
         // SOCK_DGRAM → UDP protocol (unlike SOCK_STREAM for TCP)
-        // 0 → choose default protocol for UDP
+        // 0 → choose default protocol for UDP            std::cout << "=== SMTP CLIENT CONFIG ===" << std::endl;
+
         this->clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
         // Verify if socket was created
@@ -131,39 +134,40 @@ public:
             return 1;
         }
 
-        std::cout << "Connected to " << address << ":" << port << std::endl;
+        std::cout << "Connected to " << this->address << ":" << this->port << std::endl;
 
         // Read server banner
-        std::cout << "Server: " << readResponse();
+        if (this->verbose) std::cout << "Server banner: " << readResponse() << std::endl;
         return 0;
     }
 
     int run() {
         if (createSocket()) return 1;
 
+        std::cout << "Init communication" << std::endl;
         // EHLO
-        if (sendCommand("EHLO localhost\r\n")) return 1;
+        if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
 
         // MAIL FROM
-        if (sendCommand("MAIL FROM:<" + from + ">\r\n")) return 1;
+        if (sendCommand("MAIL FROM:<" + this->from + ">\r\n")) return 1;
 
         // RCPT TO
-        if (sendCommand("RCPT TO:<" + to + ">\r\n")) return 1;
+        if (sendCommand("RCPT TO:<" + this->to + ">\r\n")) return 1;
 
         // DATA
         if (sendCommand("DATA\r\n")) return 1;
 
         // Message headers + body
-        std::string msg = "Subject: " + subject + "\r\n";
-        msg += "From: <" + from + ">\r\n";
-        msg += "To: <" + to + ">\r\n";
+        std::string msg = "Subject: " + this->subject + "\r\n";
+        msg += "From: <" + this->from + ">\r\n";
+        msg += "To: <" + this->to + ">\r\n";
         msg += "Content-Type: text/plain; charset=utf-8\r\n";
-        msg += "\r\n" + body + "\r\n";
+        msg += "\r\n" + this->body + "\r\n";
         msg += ".\r\n";
 
-        std::cout << "C (message data):\n" << msg;
+        std::cout << std::endl << "Message data:" << std::endl << msg << std::endl;
         if (sendAll(msg)) return 1;
-        std::cout << "S: " << readResponse();
+        std::cout << "Server response: " << std::endl << readResponse() << std::endl;
 
         // QUIT
         if (sendCommand("QUIT\r\n")) return 1;
