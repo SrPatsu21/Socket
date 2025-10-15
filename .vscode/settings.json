@@ -60,6 +60,7 @@
         "variant": "cpp",
         "condition_variable": "cpp",
         "cerrno": "cpp",
-        "csignal": "cpp"
+        "csignal": "cpp",
+        "mutex": "cpp"
     }
 }
