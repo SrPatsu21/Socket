@@ -1,6 +1,6 @@
 /*
- * Usage: ./icmp_client [address] [-v] [--buffsize <bytes>] [--pingtimes <n>] [--timeout <ms>] [--heartbeat <0|1>] [--heartms <ms>] [--payload <bytes>]
- * Example: ./icmp_client 8.8.8.8 -v --buffsize 1024 --pingtimes 10 --timeout 1000 --heartbeat 1 --heartms 1000 --payload 56
+ * Usage: ./icmp_ping [address] [-v] [--buffsize <bytes>] [--pingtimes <n>] [--timeout <ms>] [--payload <bytes>]
+ * Example: ./icmp_ping 8.8.8.8 -v --buffsize 1024 --pingtimes 10 --timeout 1000 --payload 56
  */
 
 #include <arpa/inet.h> // inet_pton()
@@ -15,10 +15,10 @@
 #include <string> // more string utils
 #include <sys/select.h>
 #include <sys/socket.h> // create socket
-#include <thread>
+#include <thread> // std::thread for heartbeat
 #include <unistd.h>
 #include <vector>
-#include <atomic>
+#include <atomic> // atomic types ensure safe access in multithreaded
 #include <mutex>
 #include <condition_variable>
 
@@ -30,18 +30,13 @@ private:
     int buffsize = 1024;
     int timeoutMs = 1000;
     int pingTimes = 4;
-    bool heartbeatEnabled = false;
-    int heartbeatMs = 1000;
     int payloadSize = 56;
-    bool pingEnabled = true;
 
     sockaddr_in dest{};
     uint16_t pid;
-    std::atomic<bool> running;
     std::atomic<bool> waitingPing;
     std::mutex mtx;
     std::condition_variable cv;
-    std::atomic<int> heartbeatCount;
 
 public:
     ICMPPing(
@@ -50,23 +45,15 @@ public:
         int buffsize,
         int pingTimes,
         int timeoutMs,
-        bool pingEnabled,
-        bool heartbeatEnabled,
-        int heartbeatMs,
         int payloadSize
     ) :
         address(addr),
         verbose(verbose),
         buffsize(buffsize),
-        pingTimes(pingTimes),
         timeoutMs(timeoutMs),
-        pingEnabled(pingEnabled),
-        heartbeatEnabled(heartbeatEnabled),
-        heartbeatMs(heartbeatMs),
+        pingTimes(pingTimes),
         payloadSize(payloadSize),
-        running(true),
-        waitingPing(false),
-        heartbeatCount(0)
+        waitingPing(false)
     {
         this->pid = static_cast<uint16_t>(getpid() & 0xFFFF);
     }
@@ -80,9 +67,8 @@ public:
             std::cout << "=== ICMP PING CONFIG ===" << std::endl;
             std::cout << "Target Address: " << this->address << std::endl;
             std::cout << "Buffer size: " << this->buffsize << " bytes" << std::endl;
-            std::cout << "Ping: " << (this->pingEnabled ? "ON" : "OFF") << " (" << this->pingTimes << " times)" << std::endl;
+            std::cout << "Ping times: " << this->pingTimes << std::endl;
             std::cout << "Timeout: " << this->timeoutMs << " ms" << std::endl;
-            std::cout << "Heartbeat: " << (this->heartbeatEnabled ? "ON" : "OFF") << " (" << heartbeatMs << " ms)" << std::endl;
             std::cout << "Payload size: " << this->payloadSize << " bytes" << std::endl;
             std::cout << "Verbose mode enabled" << std::endl;
             std::cout << "========================" << std::endl;
@@ -186,69 +172,40 @@ private:
 public:
     // Ping loop
     void startPingLoop() {
-        if (!pingEnabled) return;
+        int lostCount = 0;
+        long long minRTT = 1e9, maxRTT = 0, sumRTT = 0;
 
-        std::thread([this]() {
-            int lostCount = 0;
-            long long minRTT = 1e9, maxRTT = 0, sumRTT = 0;
+        for (int i = 0; i < pingTimes; i++) {
+            uint16_t seq = i + 1;
+            sendEcho(seq);
 
-            for (int i = 0; i < pingTimes && running; i++) {
-                uint16_t seq = i + 1;
-                sendEcho(seq);
-
-                int rtt = -1;
-                if (!receiveEcho(seq, rtt)) {
-                    lostCount++;
-                    std::cout << "Ping " << seq << " Timeout\n";
-                } else {
-                    std::cout << "Ping " << seq << " Reply OK | RTT: " << rtt << " ms\n";
-                    sumRTT += rtt;
-                    if (rtt < minRTT) minRTT = rtt;
-                    if (rtt > maxRTT) maxRTT = rtt;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
+            int rtt = -1;
+            if (!receiveEcho(seq, rtt)) {
+                lostCount++;
+                std::cout << "Ping " << seq << " Timeout\n";
+            } else {
+                std::cout << "Ping " << seq << " Reply OK | RTT: " << rtt << " ms\n";
+                sumRTT += rtt;
+                if (rtt < minRTT) minRTT = rtt;
+                if (rtt > maxRTT) maxRTT = rtt;
             }
 
-            std::cout << "\nPing finished. Lost: " << lostCount << "/" << pingTimes
-                      << " (" << 100.0 * lostCount / pingTimes << "%)\n";
-            if (pingTimes - lostCount > 0) {
-                std::cout << "RTT min/avg/max = " << minRTT << "/" << (sumRTT / (pingTimes - lostCount)) << "/" << maxRTT << " ms\n";
-                if (!this->heartbeatEnabled)
-                {
-                    this->running = false;
-                }
-            }
+        }
 
-        }).detach();
-
+        std::cout << std::endl << "Ping finished. Lost: " << lostCount << "/" << this->pingTimes << " (" << 100.0 * lostCount / this->pingTimes << "%)" << std::endl;
+        if (this->pingTimes - lostCount > 0) {
+            std::cout << "RTT min/avg/max = " << minRTT << "/" << (sumRTT / (this->pingTimes - lostCount)) << "/" << maxRTT << " ms" << std::endl;
+        }
     }
 
-    // Heartbeat loop
-    void startHeartbeatLoop() {
-        if (!heartbeatEnabled) return;
-
-        std::thread([this]() {
-            while (running) {
-                int n = heartbeatCount++;
-                std::cout << "Heartbeat " << n << " sent\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(heartbeatMs));
-            }
-        }).detach();
-    }
 
     void run() {
         displayInfo();
-        startHeartbeatLoop();
         startPingLoop();
-
-        // Keep main thread alive
-        while (running) std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     void cleanup() {
         if (sock >= 0) close(sock);
-        running = false;
     }
 };
 
@@ -258,9 +215,6 @@ int main(int argc, char** argv) {
     int buffsize = 1024;
     int pingTimes = 4;
     int timeoutMs = 1000;
-    bool pingEnabled = true;
-    bool heartbeatEnabled = false;
-    int heartbeatMs = 1000;
     int payloadSize = 56;
 
     // Parse arguments
@@ -270,8 +224,6 @@ int main(int argc, char** argv) {
         else if (arg == "--buffsize" && i + 1 < argc) buffsize = std::stoi(argv[++i]);
         else if (arg == "--pingtimes" && i + 1 < argc) pingTimes = std::stoi(argv[++i]);
         else if (arg == "--timeout" && i + 1 < argc) timeoutMs = std::stoi(argv[++i]);
-        else if (arg == "--heartbeat" && i + 1 < argc) heartbeatEnabled = std::stoi(argv[++i]) != 0;
-        else if (arg == "--heartms" && i + 1 < argc) heartbeatMs = std::stoi(argv[++i]);
         else if (arg == "--payload" && i + 1 < argc) payloadSize = std::stoi(argv[++i]);
         else if (address == "127.0.0.1" && arg[0] != '-') address = arg;
         else {
@@ -280,7 +232,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    ICMPPing ping(address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs, payloadSize);
+    ICMPPing ping(address, verbose, buffsize, pingTimes, timeoutMs, payloadSize);
     if (!ping.createSocket()) return 1;
 
     ping.run();

@@ -184,7 +184,7 @@ public:
         if (!this->pingEnabled) return;
 
         std::thread([this]() {
-            long long minRTT = 90000;
+            long long minRTT = 1e9;
             long long maxRTT = 0;
             double averageRTT = 0;
             int lostCount = 0;
