@@ -1,28 +1,27 @@
-#include <arpa/inet.h>
+#include <arpa/inet.h> // inet_pton()
 #include <chrono>
 #include <csignal>
-#include <cstring>
+#include <cstring> // strings
 #include <errno.h>
 #include <fcntl.h>
 #include <iomanip>
-#include <iostream>
-#include <netinet/ip_icmp.h>
-#include <netinet/in.h>
-#include <string>
+#include <iostream>  // output (cout, cin)
+#include <netinet/ip_icmp.h> // ICMP struct
+#include <netinet/in.h> // socket struct and utils (sockaddr_in)
+#include <string> // more string utils
 #include <sys/select.h>
-#include <sys/socket.h>
+#include <sys/socket.h> // create socket
 #include <sys/time.h>
 #include <thread>
-#include <unistd.h>
+#include <unistd.h> // posix close(), read(), write()
 #include <vector>
-
-using namespace std;
-using namespace std::chrono;
+#include <netdb.h> // resolve hostname
+#include <cerrno> // print message immediately - unbuffered
 
 class ICMPPing {
 public:
     struct Config {
-        string address = "127.0.0.1";
+        std::string address = "127.0.0.1";
         bool verbose = false;
         int buffsize = 1024;
         int timeoutMs = 1000;
@@ -40,6 +39,8 @@ private:
     bool stopRequested = false;
 
 public:
+    static ICMPPing* instance;
+
     explicit ICMPPing(const Config& config) : cfg(config) {
         pid = static_cast<uint16_t>(getpid() & 0xFFFF);
         setupSocket();
@@ -52,7 +53,6 @@ public:
         if (sock >= 0) close(sock);
     }
 
-    static ICMPPing* instance;
     static void signalHandler(int) {
         if (instance) instance->stopRequested = true;
     }
@@ -69,7 +69,7 @@ private:
         sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
         if (sock < 0) {
             perror("socket");
-            cerr << "Note: requires root privileges (CAP_NET_RAW)\n";
+            std::cerr << "Note: requires root privileges (CAP_NET_RAW)\n";
             exit(1);
         }
         if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &cfg.buffsize, sizeof(cfg.buffsize)) < 0) {
@@ -80,7 +80,7 @@ private:
     void resolveAddress() {
         dest.sin_family = AF_INET;
         if (inet_pton(AF_INET, cfg.address.c_str(), &dest.sin_addr) != 1) {
-            cerr << "Invalid IPv4 address: " << cfg.address << "\n";
+            std::cerr << "Invalid IPv4 address: " << cfg.address << "\n";
             exit(1);
         }
     }
@@ -107,7 +107,7 @@ private:
 
         memcpy(buf, &hdr, sizeof(hdr));
 
-        auto now = duration_cast<microseconds>(high_resolution_clock::now().time_since_epoch()).count();
+        auto now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         uint64_t ts = htobe64(now);
         memcpy(buf + sizeof(hdr), &ts, sizeof(ts));
         if (cfg.payloadSize > 8)
@@ -120,7 +120,7 @@ private:
     }
 
     bool sendEcho(uint16_t seq) {
-        vector<uint8_t> buf(sizeof(icmphdr) + cfg.payloadSize);
+        std::vector<uint8_t> buf(sizeof(icmphdr) + cfg.payloadSize);
         int len = buildPacket(buf.data(), seq);
         ssize_t sent = sendto(sock, buf.data(), len, 0, (sockaddr*)&dest, sizeof(dest));
         if (sent < 0) {
@@ -130,8 +130,8 @@ private:
         return true;
     }
 
-    bool receiveEcho(uint16_t seq, int& rtt_us, string& fromAddr) {
-        vector<uint8_t> recvbuf(cfg.buffsize);
+    bool receiveEcho(uint16_t seq, int& rtt_us, std::string& fromAddr) {
+        std::vector<uint8_t> recvbuf(cfg.buffsize);
         sockaddr_in from{};
         socklen_t addrlen = sizeof(from);
 
@@ -155,7 +155,7 @@ private:
                 uint64_t ts_net;
                 memcpy(&ts_net, recvbuf.data() + ihl + sizeof(icmphdr), 8);
                 uint64_t ts_sent = be64toh(ts_net);
-                auto now = duration_cast<microseconds>(high_resolution_clock::now().time_since_epoch()).count();
+                auto now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
                 rtt_us = int(now - ts_sent);
             }
             char addr[INET_ADDRSTRLEN];
@@ -167,9 +167,9 @@ private:
     }
 
     void runOnce() {
-        cout << "PING " << cfg.address << " (" << cfg.address << "): " << cfg.payloadSize << " data bytes\n";
+        std::cout << "PING " << cfg.address << " (" << cfg.address << "): " << cfg.payloadSize << " data bytes\n";
         int sent = 0, received = 0;
-        vector<int> rtts;
+        std::vector<int> rtts;
 
         for (int i = 0; i < cfg.pingTimes && !stopRequested; ++i) {
             uint16_t seq = i + 1;
@@ -177,62 +177,61 @@ private:
             sent++;
 
             int rtt_us = -1;
-            string from;
+            std::string from;
             if (receiveEcho(seq, rtt_us, from)) {
                 received++;
                 rtts.push_back(rtt_us);
-                cout << "Reply from " << from << ": seq=" << seq << " time=" << rtt_us / 1000.0 << " ms\n";
+                std::cout << "Reply from " << from << ": seq=" << seq << " time=" << rtt_us / 1000.0 << " ms\n";
             } else {
-                cout << "Request timed out for seq=" << seq << "\n";
+                std::cout << "Request timed out for seq=" << seq << "\n";
             }
 
             if (i + 1 < cfg.pingTimes)
-                this_thread::sleep_for(milliseconds(cfg.heartbeatMs));
+                std::this_thread::sleep_for(std::chrono::milliseconds(cfg.heartbeatMs));
         }
 
         printSummary(sent, received, rtts);
     }
 
     void runHeartbeat() {
-        cout << "Starting heartbeat mode. Press Ctrl+C to stop.\n";
+        std::cout << "Starting heartbeat mode. Press Ctrl+C to stop.\n";
         uint16_t seq = 0;
         int sent = 0, received = 0;
-        vector<int> rtts;
+        std::vector<int> rtts;
 
         while (!stopRequested) {
             seq++;
             sendEcho(seq);
             sent++;
             int rtt_us = -1;
-            string from;
+            std::string from;
             if (receiveEcho(seq, rtt_us, from)) {
                 received++;
                 rtts.push_back(rtt_us);
-                cout << "Reply from " << from << ": seq=" << seq << " time=" << rtt_us / 1000.0 << " ms\n";
+                std::cout << "Reply from " << from << ": seq=" << seq << " time=" << rtt_us / 1000.0 << " ms\n";
             } else {
-                cout << "Request timed out for seq=" << seq << "\n";
+                std::cout << "Request timed out for seq=" << seq << "\n";
             }
-            this_thread::sleep_for(milliseconds(cfg.heartbeatMs));
+            std::this_thread::sleep_for(std::chrono::milliseconds(cfg.heartbeatMs));
         }
 
         printSummary(sent, received, rtts);
     }
 
-    void printSummary(int sent, int received, const vector<int>& rtts) {
-        cout << "\n--- " << cfg.address << " ping statistics ---\n";
+    void printSummary(int sent, int received, const std::vector<int>& rtts) {
+        std::cout << "\n--- " << cfg.address << " ping statistics ---\n";
         int lost = sent - received;
         double loss = sent ? 100.0 * lost / sent : 0.0;
-        cout << sent << " packets transmitted, " << received << " received, " 
-             << fixed << setprecision(1) << loss << "% packet loss\n";
+        std::cout << sent << " packets transmitted, " << received << " received, " << std::fixed << std::setprecision(1) << loss << "% packet loss\n";
         if (!rtts.empty()) {
             double minv = 1e9, maxv = 0, sum = 0;
             for (auto v : rtts) {
                 double ms = v / 1000.0;
-                minv = min(minv, ms);
-                maxv = max(maxv, ms);
+                minv = std::min(minv, ms);
+                maxv = std::max(maxv, ms);
                 sum += ms;
             }
-            cout << "rtt min/avg/max = " << minv << "/" << (sum / rtts.size()) << "/" << maxv << " ms\n";
+            std::cout << "rtt min/avg/max = " << minv << "/" << (sum / rtts.size()) << "/" << maxv << " ms\n";
         }
     }
 };
@@ -244,17 +243,17 @@ int main(int argc, char** argv) {
     ICMPPing::Config cfg;
 
     for (int i = 1; i < argc; ++i) {
-        string arg = argv[i];
+        std::string arg = argv[i];
         if (arg == "-v") cfg.verbose = true;
-        else if (arg == "--buffsize" && i + 1 < argc) cfg.buffsize = stoi(argv[++i]);
-        else if (arg == "--timeout" && i + 1 < argc) cfg.timeoutMs = stoi(argv[++i]);
-        else if (arg == "--pingtimes" && i + 1 < argc) cfg.pingTimes = stoi(argv[++i]);
-        else if (arg == "--heartbeat" && i + 1 < argc) cfg.heartbeatEnabled = stoi(argv[++i]) != 0;
-        else if (arg == "--heartms" && i + 1 < argc) cfg.heartbeatMs = stoi(argv[++i]);
-        else if (arg == "--payload" && i + 1 < argc) cfg.payloadSize = stoi(argv[++i]);
+        else if (arg == "--buffsize" && i + 1 < argc) cfg.buffsize = std::stoi(argv[++i]);
+        else if (arg == "--timeout" && i + 1 < argc) cfg.timeoutMs = std::stoi(argv[++i]);
+        else if (arg == "--pingtimes" && i + 1 < argc) cfg.pingTimes = std::stoi(argv[++i]);
+        else if (arg == "--heartbeat" && i + 1 < argc) cfg.heartbeatEnabled = std::stoi(argv[++i]) != 0;
+        else if (arg == "--heartms" && i + 1 < argc) cfg.heartbeatMs = std::stoi(argv[++i]);
+        else if (arg == "--payload" && i + 1 < argc) cfg.payloadSize = std::stoi(argv[++i]);
         else if (cfg.address == "127.0.0.1" && arg[0] != '-') cfg.address = arg;
         else {
-            cerr << "Unknown arg: " << arg << "\n";
+            std::cerr << "Unknown arg: " << arg << "\n";
             return 1;
         }
     }

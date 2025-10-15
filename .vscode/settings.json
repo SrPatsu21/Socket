@@ -59,6 +59,7 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "condition_variable": "cpp",
-        "cerrno": "cpp"
+        "cerrno": "cpp",
+        "csignal": "cpp"
     }
 }
