@@ -167,37 +167,55 @@ private:
         return sent >= 0;
     }
 
-    // Receive ICMP echo reply
-    bool receiveEcho(uint16_t seq, int& rtt_ms) {
-        std::vector<uint8_t> buf(this->buffsize);
-        sockaddr_in from{};
-        socklen_t addrlen = sizeof(from);
+int receiveEcho(uint16_t seq, int& rtt_ms) {
+    std::vector<uint8_t> buf(this->buffsize); // Alocate buffer
+    // Structure to sender address
+    sockaddr_in from{};
+    socklen_t addrlen = sizeof(from);
 
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(sock, &fds);
-        timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+    // Process-unique identifier (handle) for a file or other input/output
+    fd_set fds;
+    FD_ZERO(&fds); // Clear file descriptor set (handle)
+    FD_SET(this->sock, &fds); // Add ICMP socket to watch list
 
-        int rv = select(sock + 1, &fds, nullptr, nullptr, &tv);
-        if (rv <= 0) return false;
+    // Convert timeout from milliseconds to timeval struct (seconds + microseconds)
+    timeval tv{
+        this->timeoutMs / 1000, // seconds
+        (this->timeoutMs % 1000) * 1000 // microseconds
+    };
 
-        ssize_t n = recvfrom(sock, buf.data(), buf.size(), 0, (sockaddr*)&from, &addrlen);
-        if (n <= 0) return false;
+    // Wait data or timeout
+    int rv = select(this->sock + 1, &fds, nullptr, nullptr, &tv);
+    if (rv <= 0) return 1; // 0 -> timeout, 0< -> error
 
-        int ihl = reinterpret_cast<iphdr*>(buf.data())->ihl * 4;
-        icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl);
+    // recive data and sender info
+    ssize_t n = recvfrom(this->sock, buf.data(), buf.size(), 0, (sockaddr*)&from, &addrlen);
+    if (n <= 0) return 1; // 0 -> no data, n < 0 -> error
 
-        if (icmp->type == ICMP_ECHOREPLY && ntohs(icmp->un.echo.id) == pid && ntohs(icmp->un.echo.sequence) == seq) {
-            uint64_t ts_sent;
-            memcpy(&ts_sent, buf.data() + ihl + sizeof(icmphdr), 8);
-            ts_sent = be64toh(ts_sent);
-            auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-            rtt_ms = int((now - ts_sent) / 1000);
-            return true;
-        }
-        return false;
+    // The IP header length (IHL), multiply by 4 to get bytes
+    int ihl = reinterpret_cast<iphdr*>(buf.data())->ihl * 4;
+    // Move pointer to the ICMP header
+    icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl);
+
+    if (
+        icmp->type == ICMP_ECHOREPLY && // echo replay
+        ntohs(icmp->un.echo.id) == this->pid && // verify PID
+        ntohs(icmp->un.echo.sequence) == seq) // seq must match
+    {
+
+        uint64_t ts_sent;
+        memcpy(&ts_sent, buf.data() + ihl + sizeof(icmphdr), 8); //Extract the timestamp from the ICMP payload
+        ts_sent = be64toh(ts_sent); // big-endian to host byte order
+
+        // calc RTT (convert microseconds → milliseconds)
+        long long now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        rtt_ms = int((now - ts_sent) / 1000);
+
+        return 0;
     }
+
+    return 1;
+}
 
 public:
     // Ping loop
@@ -207,7 +225,7 @@ public:
         long long maxRTT = 0;
         long long sumRTT = 0;
 
-        for (int i = 0; i < pingTimes; i++) {
+        for (int i = 0; i < this->pingTimes; i++) {
             uint16_t seq = i + 1;
             sendEcho(seq);
 
