@@ -1,6 +1,6 @@
 /*
  * Usage: ./icmp_ping [address] [-v] [--buffsize <bytes>] [--pingtimes <n>] [--timeout <ms>] [--payload <bytes>]
- * Example: ./icmp_ping 8.8.8.8 -v --buffsize 1024 --pingtimes 10 --timeout 1000 --payload 56
+ * Example: sudo ./icmp_ping 8.8.8.8 -v --buffsize 1024 --pingtimes 10 --timeout 1000 --payload 56
  */
 
 #include <arpa/inet.h> // inet_pton()
@@ -200,9 +200,8 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
     if (
         icmp->type == ICMP_ECHOREPLY && // echo replay
         ntohs(icmp->un.echo.id) == this->pid && // verify PID
-        ntohs(icmp->un.echo.sequence) == seq) // seq must match
-    {
-
+        ntohs(icmp->un.echo.sequence) == seq // seq must match
+    ) {
         uint64_t ts_sent;
         memcpy(&ts_sent, buf.data() + ihl + sizeof(icmphdr), 8); //Extract the timestamp from the ICMP payload
         ts_sent = be64toh(ts_sent); // big-endian to host byte order
@@ -212,6 +211,29 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
         rtt_ms = int((now - ts_sent) / 1000);
 
         return 0;
+    } else { // Handel timeouts and erros
+        switch (icmp->type) {
+            case ICMP_DEST_UNREACH: {
+                std::string reason;
+                switch (icmp->code) {
+                    case 0: reason = "Destination Network Unreachable"; break;
+                    case 1: reason = "Destination Host Unreachable"; break;
+                    case 2: reason = "Protocol Unreachable"; break;
+                    case 3: reason = "Port Unreachable"; break;
+                    case 4: reason = "Fragmentation Needed"; break;
+                    case 5: reason = "Source Route Failed"; break;
+                    default: reason = "Destination Unreachable (Other)"; break;
+                }
+                std::cout << "ICMP Error: " << reason << std::endl;
+                break;
+            }
+            case ICMP_TIME_EXCEEDED:
+                std::cout << "ICMP Error: Time Exceeded" << std::endl; break;
+            case ICMP_REDIRECT:
+                std::cout << "ICMP Error: Redirect Message" << std::endl; break;
+            default:
+                std::cout << "ICMP Error: Unknown type (" << int(icmp->type) << ")" << std::endl; break;
+        }
     }
 
     return 1;
@@ -228,18 +250,15 @@ public:
         for (int i = 0; i < this->pingTimes; i++) {
             uint16_t seq = i + 1;
             sendEcho(seq);
-
             int rtt = -1;
-            if (!receiveEcho(seq, rtt)) {
+            if (receiveEcho(seq, rtt)) {
                 lostCount++;
-                std::cout << "Ping " << seq << " Timeout\n";
             } else {
                 std::cout << "Ping " << seq << " Reply OK | RTT: " << rtt << " ms\n";
                 sumRTT += rtt;
                 if (rtt < minRTT) minRTT = rtt;
                 if (rtt > maxRTT) maxRTT = rtt;
             }
-
         }
 
         std::cout << std::endl << "Ping finished. Lost: " << lostCount << "/" << this->pingTimes << " (" << 100.0 * lostCount / this->pingTimes << "%)" << std::endl;
