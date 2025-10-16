@@ -4,10 +4,10 @@
  */
 
 #include <arpa/inet.h> // inet_pton()
-#include <chrono>
+#include <chrono> // std::chrono for time
 #include <csignal>
 #include <cstring> // strings
-#include <cerrno>
+#include <cerrno> // print message immediately - unbuffered
 #include <iomanip>
 #include <iostream>  // output (cout, cin)
 #include <netinet/ip_icmp.h> // ICMP struct
@@ -15,16 +15,13 @@
 #include <string> // more string utils
 #include <sys/select.h>
 #include <sys/socket.h> // create socket
-#include <thread> // std::thread for heartbeat
-#include <unistd.h>
-#include <vector>
+#include <unistd.h> // posix close(), read(), write()
+#include <vector> // std::vector
 #include <atomic> // atomic types ensure safe access in multithreaded
-#include <mutex>
-#include <condition_variable>
 
 class ICMPPing {
 private:
-    int sock = -1;
+    int sock;
     std::string address = "127.0.0.1";
     bool verbose = false;
     int buffsize = 1024;
@@ -34,9 +31,6 @@ private:
 
     sockaddr_in dest{};
     uint16_t pid;
-    std::atomic<bool> waitingPing;
-    std::mutex mtx;
-    std::condition_variable cv;
 
 public:
     ICMPPing(
@@ -52,8 +46,7 @@ public:
         buffsize(buffsize),
         timeoutMs(timeoutMs),
         pingTimes(pingTimes),
-        payloadSize(payloadSize),
-        waitingPing(false)
+        payloadSize(payloadSize)
     {
         this->pid = static_cast<uint16_t>(getpid() & 0xFFFF);
     }
@@ -76,70 +69,107 @@ public:
     }
 
     int createSocket() {
+        //* Create socket
+        // AF_INET → IPv4 address family
+        // SOCK_RAW → Raw socket (used for low-level protocols like ICMP)
+        // 1 or IPPROTO_ICMP → Protocol number for ICMP packets
         this->sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+        // Verify if socket was created
         if (sock < 0) {
-            perror("socket");
-            std::cerr << "Requires root privileges (CAP_NET_RAW)\n";
-            return false;
+            std::cerr << "Error: failed to create socket." << std::endl << "May requires root privileges.";
+            return 1;
         }
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buffsize, sizeof(buffsize)) < 0 && verbose) {
+
+        // Set a real buffer fot the socket
+        if (setsockopt(this->sock, SOL_SOCKET, SO_RCVBUF, &this->buffsize, sizeof(this->buffsize)) < 0 && this->verbose) {
             perror("setsockopt SO_RCVBUF");
         }
 
-        dest.sin_family = AF_INET;
-        if (inet_pton(AF_INET, address.c_str(), &dest.sin_addr) != 1) {
-            std::cerr << "Invalid address: " << address << "\n";
-            return false;
+        this->dest.sin_family = AF_INET; // IPv4
+        // dont need port
+
+        // Set IP to listen
+        if (inet_pton(AF_INET, this->address.c_str(), &this->dest.sin_addr) != 1) {
+            std::cerr << "Invalid address: " << this->address << std::endl;
+            return 1;
         }
-        return true;
+        return 0;
     }
 
 private:
-    // Compute ICMP checksum
+    //* ICMP checksum
+    // 16-bit value used to verify data integrity of header + payload.
+    // It's the one's complement of the one's complement sum of all 16-bit words.
     static uint16_t checksum(const void* buf, int len) {
+        // raw data
         const uint8_t* data = static_cast<const uint8_t*>(buf);
+        // 32-bit to prevents overflow
         uint32_t sum = 0;
-        for (int i = 0; i + 1 < len; i += 2) sum += (data[i] << 8) | data[i+1];
-        if (len & 1) sum += data[len - 1] << 8;
-        while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+        // Add two bytes at a time
+        for (int i = 0; i + 1 < len; i += 2) {
+            // Combine two consecutive bytes into one 16-bit word and add to sum
+            sum += (data[i] << 8) | data[i + 1];
+        }
+        // If data length is odd, add the last remaining byte
+        if (len & 1) sum += data[len - 1] << 8;  // Shift left to make it the high byte of a 16-bit word
+        // Test if bigger than 16 bits
+        while (sum >> 16) {
+            sum = (sum & 0xFFFF) + (sum >> 16); //carry bits from the upper 16 bits into the lower 16 bits
+        }
+        // htons() converts from host byte order to network byte order (big-endian)
         return htons(~sum & 0xFFFF);
     }
 
-    // Build ICMP echo request packet
+    // Build an ICMP Echo Request (ping) packet and return packet size
     int buildPacket(uint8_t* buf, uint16_t seq) {
-        icmphdr hdr{};
-        hdr.type = ICMP_ECHO;
-        hdr.code = 0;
-        hdr.un.echo.id = htons(pid);
-        hdr.un.echo.sequence = htons(seq);
-        hdr.checksum = 0;
+        icmphdr hdr{}; // ICMP header structure
+        hdr.type = ICMP_ECHO; // type = 8 -> Echo Request
+        hdr.code = 0; // Code for Echo Request (no subcodes used)
 
+        // Identifier field (used to match replies with requests), usually set to the process ID
+        hdr.un.echo.id = htons(pid); //htons() converts to network byte order (big-endian)
+        hdr.un.echo.sequence = htons(seq); // Sequence number (increments with each ping)
+        hdr.checksum = 0; // Calc after
+
+        // Copy the header to  buffer
         memcpy(buf, &hdr, sizeof(hdr));
 
-        auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-        uint64_t ts = htobe64(now);
+        // Get current time since epoch, in microseconds
+        long long now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        uint64_t ts = htobe64(now); // Timestamp to big-endian 64-bit integer
+
+        // Copy timestamp after header
         memcpy(buf + sizeof(hdr), &ts, sizeof(ts));
 
-        if (payloadSize > 8)
-            memset(buf + sizeof(hdr) + 8, 0xAA, payloadSize - 8);
+        // fill payload with 0xAA
+        if (this->payloadSize > 8) memset(buf + sizeof(hdr) + 8, 0xAA, this->payloadSize - 8);
 
-        reinterpret_cast<icmphdr*>(buf)->checksum = checksum(buf, sizeof(hdr) + payloadSize);
-        return sizeof(hdr) + payloadSize;
+        reinterpret_cast<icmphdr*>(buf)->checksum = checksum(buf, sizeof(hdr) + this->payloadSize); //calc checksum
+
+        // Return total number of bytes written to buffer
+        return sizeof(hdr) + this->payloadSize;
     }
 
-    // Send ICMP echo request
+    // Send echo request
     bool sendEcho(uint16_t seq) {
-        std::vector<uint8_t> buf(sizeof(icmphdr) + payloadSize);
+        std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize); //Allocate buffer
         buildPacket(buf.data(), seq);
-        ssize_t sent = sendto(sock, buf.data(), buf.size(), 0, (sockaddr*)&dest, sizeof(dest));
-        if (sent < 0 && verbose) perror("sendto");
+        ssize_t sent = sendto(
+            this->sock,
+            buf.data(), // data
+            buf.size(),
+            0, // Optional flags (MSG_DONTWAIT for non-blocking)
+            (sockaddr*)&this->dest,
+            sizeof(this->dest)
+        );
+        if (sent < 0 && this->verbose) perror("sendto");
         return sent >= 0;
     }
 
     // Receive ICMP echo reply
     bool receiveEcho(uint16_t seq, int& rtt_ms) {
-        std::vector<uint8_t> buf(buffsize);
+        std::vector<uint8_t> buf(this->buffsize);
         sockaddr_in from{};
         socklen_t addrlen = sizeof(from);
 
@@ -173,7 +203,9 @@ public:
     // Ping loop
     void startPingLoop() {
         int lostCount = 0;
-        long long minRTT = 1e9, maxRTT = 0, sumRTT = 0;
+        long long minRTT = 1e9;
+        long long maxRTT = 0;
+        long long sumRTT = 0;
 
         for (int i = 0; i < pingTimes; i++) {
             uint16_t seq = i + 1;
@@ -233,7 +265,7 @@ int main(int argc, char** argv) {
     }
 
     ICMPPing ping(address, verbose, buffsize, pingTimes, timeoutMs, payloadSize);
-    if (!ping.createSocket()) return 1;
+    if (ping.createSocket()) return 1;
 
     ping.run();
     return 0;

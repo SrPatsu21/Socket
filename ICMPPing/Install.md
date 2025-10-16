@@ -5,7 +5,7 @@ mkdir build
 cd build
 cmake ..
 cmake --build .
-./icmp_ping
+sudo ./icmp_ping
 ```
 
 - if Release

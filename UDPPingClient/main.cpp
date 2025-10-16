@@ -103,14 +103,13 @@ public:
         this->serverAddress.sin_family = AF_INET; // IPv4
         this->serverAddress.sin_port = htons(port); // Host to Network Short (host byte order to network byte order)
 
-        // Set network interface to listen
+        // Set IP to listen
         if (inet_pton(AF_INET, this->address.c_str(), &this->serverAddress.sin_addr) <= 0) {
             std::cerr << "Invalid address: " << this->address << std::endl;
-            close(this->clientSocket);
             return 1;
         }
 
-        std::cout << "UDP client started. Type messages to send to the server." << std::endl;
+        std::cout << "UDP client started." << std::endl;
         return 0;
     }
 
