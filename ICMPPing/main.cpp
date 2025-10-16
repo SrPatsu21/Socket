@@ -5,19 +5,17 @@
 
 #include <arpa/inet.h> // inet_pton()
 #include <chrono> // std::chrono for time
-#include <csignal>
 #include <cstring> // strings
 #include <cerrno> // print message immediately - unbuffered
-#include <iomanip>
 #include <iostream>  // output (cout, cin)
 #include <netinet/ip_icmp.h> // ICMP struct
 #include <netinet/in.h> // socket struct and utils (sockaddr_in)
 #include <string> // more string utils
-#include <sys/select.h>
 #include <sys/socket.h> // create socket
 #include <unistd.h> // posix close(), read(), write()
 #include <vector> // std::vector
 #include <atomic> // atomic types ensure safe access in multithreaded
+#include <netdb.h> // for gethostbyname()
 
 class ICMPPing {
 private:
@@ -90,9 +88,15 @@ public:
         // dont need port
 
         // Set IP to listen
-        if (inet_pton(AF_INET, this->address.c_str(), &this->dest.sin_addr) != 1) {
-            std::cerr << "Invalid address: " << this->address << std::endl;
-            return 1;
+        if (inet_pton(AF_INET, this->address.c_str(), &this->dest.sin_addr) != 1) // Try as direct IP
+        {
+            // try to resolve as a hostname
+            hostent* host = gethostbyname(this->address.c_str());
+            if (!host) {
+                std::cerr << "Error: Could not resolve host: " << this->address << std::endl;
+                return 1;
+            }
+            this->dest.sin_addr = *reinterpret_cast<in_addr*>(host->h_addr); // represents the address (char* to in_addr)
         }
         return 0;
     }
@@ -186,6 +190,16 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
 
     // Wait data or timeout
     int rv = select(this->sock + 1, &fds, nullptr, nullptr, &tv);
+    if (rv == 0) // timed out
+    {
+        std::cout << "Ping " << seq << " Timeout" << std::endl;
+        return 1;
+    }
+    if (rv < 0) // error
+    {
+        std::cout << "Ping " << seq << " Select error" << std::endl;
+        return 1;
+    }
     if (rv <= 0) return 1; // 0 -> timeout, 0< -> error
 
     // recive data and sender info
@@ -228,15 +242,17 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
                 break;
             }
             case ICMP_TIME_EXCEEDED:
-                std::cout << "ICMP Error: Time Exceeded" << std::endl; break;
+                std::cout << "ICMP Error: Time Exceeded" << std::endl;
+                break;
             case ICMP_REDIRECT:
-                std::cout << "ICMP Error: Redirect Message" << std::endl; break;
+                std::cout << "ICMP Error: Redirect Message" << std::endl;
+                break;
             default:
-                std::cout << "ICMP Error: Unknown type (" << int(icmp->type) << ")" << std::endl; break;
+                std::cout << "ICMP Error: Unknown type (" << int(icmp->type) << ")" << std::endl;
+                break;
         }
+        return 1;
     }
-
-    return 1;
 }
 
 public:
@@ -253,6 +269,7 @@ public:
             int rtt = -1;
             if (receiveEcho(seq, rtt)) {
                 lostCount++;
+
             } else {
                 std::cout << "Ping " << seq << " Reply OK | RTT: " << rtt << " ms\n";
                 sumRTT += rtt;
