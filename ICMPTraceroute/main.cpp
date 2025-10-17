@@ -18,42 +18,80 @@ private:
     int sock;
     sockaddr_in dest{};
     std::string address;
-    int maxHops = 30;
-    int timeoutMs = 1000;
-    int payloadSize = 32;
-    int pid = getpid() & 0xFFFF;
-    bool verbose = false;
+    int maxHops;
+    int timeoutMs;
+    int payloadSize;
+    int buffsize;
+    int pid;
+    bool verbose;
 
 public:
     ICMPTraceroute(
         std::string addr,
         int maxHops = 30,
         int timeoutMs = 1000,
+        int payloadSize = 32,
+        int buffsize = 1024,
         bool verbose = false
     ) :
         address(addr),
         maxHops(maxHops),
         timeoutMs(timeoutMs),
+        payloadSize(payloadSize),
         verbose(verbose)
     {
         this->pid = getpid() & 0xFFFF;
-        this->sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-        if (this->sock < 0) {
-            perror("socket");
-            exit(EXIT_FAILURE);
-        }
-
-        hostent* host = gethostbyname(addr.c_str());
-        if (!host) {
-            std::cerr << "Host not found: " << addr << std::endl;
-            exit(EXIT_FAILURE);
-        }
-
-        this->dest.sin_family = AF_INET;
-        this->dest.sin_addr = *reinterpret_cast<in_addr*>(host->h_addr);
+        displayInfo();
     }
 
     ~ICMPTraceroute() { close(this->sock); }
+    void displayInfo() {
+        if (this->verbose) {
+            std::cout << "=== ICMP PING CONFIG ===" << std::endl;
+            std::cout << "Target Address: " << this->address << std::endl;
+            std::cout << "Buffer size: " << this->buffsize << " bytes" << std::endl;
+            std::cout << "Max Hops: " << this->maxHops << std::endl;
+            std::cout << "Timeout: " << this->timeoutMs << " ms" << std::endl;
+            std::cout << "Payload size: " << this->payloadSize << " bytes" << std::endl;
+            std::cout << "Verbose mode enabled" << std::endl;
+            std::cout << "========================" << std::endl;
+        }
+    }
+
+    int createSocket() {
+        //* Create socket
+        // AF_INET → IPv4 address family
+        // SOCK_RAW → Raw socket (used for low-level protocols like ICMP)
+        // 1 or IPPROTO_ICMP → Protocol number for ICMP packets
+        this->sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+        // Verify if socket was created
+        if (sock < 0) {
+            std::cerr << "Error: failed to create socket." << std::endl << "May requires root privileges.";
+            return 1;
+        }
+
+        // Set a real buffer fot the socket
+        if (setsockopt(this->sock, SOL_SOCKET, SO_RCVBUF, &this->buffsize, sizeof(this->buffsize)) < 0 && this->verbose) {
+            perror("setsockopt SO_RCVBUF");
+        }
+
+        this->dest.sin_family = AF_INET; // IPv4
+        // dont need port
+
+        // Set IP to listen
+        if (inet_pton(AF_INET, this->address.c_str(), &this->dest.sin_addr) != 1) // Try as direct IP
+        {
+            // try to resolve as a hostname
+            hostent* host = gethostbyname(this->address.c_str());
+            if (!host) {
+                std::cerr << "Error: Could not resolve host: " << this->address << std::endl;
+                return 1;
+            }
+            this->dest.sin_addr = *reinterpret_cast<in_addr*>(host->h_addr); // represents the address (char* to in_addr)
+        }
+        return 0;
+    }
 
 private:
     static uint16_t checksum(const void* buf, int len) {
