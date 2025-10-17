@@ -1,6 +1,7 @@
 /*
- * Usage: ./icmp_ping [address] [-v] [--buffsize <bytes>] [--pingtimes <n>] [--timeout <ms>] [--payload <bytes>]
- * Example: ./icmp_ping 8.8.8.8 -v --buffsize 1024 --pingtimes 10 --timeout 1000 --payload 56
+ * Usage: ./icmp_traceroute [address] [-v] [--maxhops <n>] [--timeout <ms>] [--payloadSize <bytes>] [--buffsize <bytes>]
+ * Example: sudo ./icmp_traceroute 8.8.8.8 -v --maxhops 30 --timeout 1000 --payloadSize 56 --buffsize 1024
+ * Example: sudo ./icmp_traceroute 8.8.8.8 -v --maxhops 30 --timeout 1000 --payloadSize 56 --buffsize 1024
  */
 
 #include <iostream>
@@ -38,6 +39,7 @@ public:
         maxHops(maxHops),
         timeoutMs(timeoutMs),
         payloadSize(payloadSize),
+        buffsize(buffsize),
         verbose(verbose)
     {
         this->pid = getpid() & 0xFFFF;
@@ -66,7 +68,7 @@ public:
         this->sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
         // Verify if socket was created
-        if (sock < 0) {
+        if (this->sock < 0) {
             std::cerr << "Error: failed to create socket." << std::endl << "May requires root privileges.";
             return 1;
         }
@@ -94,85 +96,122 @@ public:
     }
 
 private:
+    //* ICMP checksum
+    // 16-bit value used to verify data integrity of header + payload.
+    // It's the one's complement of the one's complement sum of all 16-bit words.
     static uint16_t checksum(const void* buf, int len) {
+        // raw data
         const uint8_t* data = static_cast<const uint8_t*>(buf);
+        // 32-bit to prevents overflow
         uint32_t sum = 0;
-        for (int i = 0; i + 1 < len; i += 2)
+        // Add two bytes at a time
+        for (int i = 0; i + 1 < len; i += 2) {
+            // Combine two consecutive bytes into one 16-bit word and add to sum
             sum += (data[i] << 8) | data[i + 1];
-        if (len & 1)
-            sum += data[len - 1] << 8;
-        while (sum >> 16)
-            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        // If data length is odd, add the last remaining byte
+        if (len & 1) sum += data[len - 1] << 8;  // Shift left to make it the high byte of a 16-bit word
+        // Test if bigger than 16 bits
+        while (sum >> 16) {
+            sum = (sum & 0xFFFF) + (sum >> 16); //carry bits from the upper 16 bits into the lower 16 bits
+        }
+        // htons() converts from host byte order to network byte order (big-endian)
         return htons(~sum & 0xFFFF);
     }
 
+    // Build an ICMP Echo Request (ping) packet and return packet size
     int buildPacket(uint8_t* buf, uint16_t seq) {
-        icmphdr hdr{};
-        hdr.type = ICMP_ECHO;
-        hdr.code = 0;
-        hdr.un.echo.id = htons(pid);
-        hdr.un.echo.sequence = htons(seq);
-        hdr.checksum = 0;
+        icmphdr hdr{}; // ICMP header structure
+        hdr.type = ICMP_ECHO; // type = 8 -> Echo Request
+        hdr.code = 0; // Code for Echo Request (no subcodes used)
 
+        // Identifier field (used to match replies with requests), usually set to the process ID
+        hdr.un.echo.id = htons(pid); //htons() converts to network byte order (big-endian)
+        hdr.un.echo.sequence = htons(seq); // Sequence number (increments with each ping)
+        hdr.checksum = 0; // Calc after
+
+        // Copy the header to  buffer
         memcpy(buf, &hdr, sizeof(hdr));
 
-        // timestamp for RTT
-        auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-        uint64_t ts = htobe64(now);
+        // Get current time since epoch, in microseconds
+        long long now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        uint64_t ts = htobe64(now); // Timestamp to big-endian 64-bit integer
+
+        // Copy timestamp after header
         memcpy(buf + sizeof(hdr), &ts, sizeof(ts));
 
-        // Fill payload
-        if (payloadSize > 8)
-            memset(buf + sizeof(hdr) + 8, 0xAB, payloadSize - 8);
+        // fill payload with 0xAB
+        if (payloadSize > 8) memset(buf + sizeof(hdr) + 8, 0xAB, payloadSize - 8);
 
-        reinterpret_cast<icmphdr*>(buf)->checksum = checksum(buf, sizeof(hdr) + payloadSize);
+        reinterpret_cast<icmphdr*>(buf)->checksum = checksum(buf, sizeof(hdr) + payloadSize); // calc checksum
+
+        // Return total number of bytes written to buffer
         return sizeof(hdr) + payloadSize;
     }
 
+    // Send echo request
     bool sendEcho(uint16_t seq, int ttl) {
+        std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize); //Allocate buffer
+        buildPacket(buf.data(), seq);
+
         // Set TTL for this hop
         if (setsockopt(this->sock, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0) {
             perror("setsockopt TTL");
             return false;
         }
 
-        std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize);
-        buildPacket(buf.data(), seq);
+        ssize_t sent = sendto(
+            this->sock,
+            buf.data(), // data
+            buf.size(),
+            0, // Optional flags (MSG_DONTWAIT for non-blocking)
+            (sockaddr*)&this->dest,
+            sizeof(this->dest)
+        );
 
-        ssize_t sent = sendto(this->sock, buf.data(), buf.size(), 0, (sockaddr*)&this->dest, sizeof(this->dest));
         if (sent < 0) {
             if (this->verbose) perror("sendto");
             return false;
         }
-
         return true;
     }
 
-    int receiveReply(double& rtt_ms, std::string& hopAddr, const std::chrono::high_resolution_clock::time_point& send_time) {
-        std::vector<uint8_t> buf(1024);
+    int receiveEcho(double& rtt_ms, std::string& hopAddr, long long send_time) {
+        std::vector<uint8_t> buf(this->buffsize); // Alocate buffer
+        // Structure to sender address
         sockaddr_in from{};
         socklen_t addrlen = sizeof(from);
 
+        // Process-unique identifier (handle) for a file or other input/output
         fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(this->sock, &fds);
-        timeval tv{this->timeoutMs / 1000, (this->timeoutMs % 1000) * 1000};
+        FD_ZERO(&fds); // Clear file descriptor set (handle)
+        FD_SET(this->sock, &fds); // Add ICMP socket to watch list
 
+        // Convert timeout from milliseconds to timeval struct (seconds + microseconds)
+        timeval tv{
+            this->timeoutMs / 1000, // seconds
+            (this->timeoutMs % 1000) * 1000 // microseconds
+        };
+
+        // Wait data or timeout
         int rv = select(this->sock + 1, &fds, nullptr, nullptr, &tv);
         if (rv == 0) return 1; // timeout
         if (rv < 0) return 2; // error
 
+        // recive data and sender info
         ssize_t n = recvfrom(this->sock, buf.data(), buf.size(), 0, (sockaddr*)&from, &addrlen);
-        if (n <= 0) return 2;
+        if (n <= 0) return 2; // 0 -> no data, n < 0 -> error
 
-        hopAddr = inet_ntoa(from.sin_addr);
+        hopAddr = inet_ntoa(from.sin_addr); // address from server
 
-        auto recv_time = std::chrono::high_resolution_clock::now();
-        rtt_ms = double((std::chrono::duration_cast<std::chrono::microseconds>(recv_time - send_time).count()))/1000;
+        // calc RTT (convert microseconds → milliseconds)
+        long long recv_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        rtt_ms = double((recv_time - send_time) / 1000);
 
-        int ihl = reinterpret_cast<iphdr*>(buf.data())->ihl * 4;
-        icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl);
+        // IP header length
+        int ihl = reinterpret_cast<iphdr*>(buf.data())->ihl * 4; // get the the IP header structure and ihl ("Internet Header Length") * 4 (IP header is, in units of 32-bit words (4 bytes each) so it converts to bytes)
+        // pointer to start of ICMP message
+        icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl); // buff pinter + IP legth
 
         if (icmp->type == ICMP_TIME_EXCEEDED) {
             return 3; // hop, but not destination
@@ -185,23 +224,23 @@ private:
 
 public:
     void run() {
+        createSocket();
         std::cout << "Tracing route to " << this->address << " (" << inet_ntoa(this->dest.sin_addr) << "), max " << this->maxHops << " hops\n";
 
-        for (int ttl = 1; ttl <= maxHops; ++ttl) {
+        for (int ttl = 1; ttl <= this->maxHops; ++ttl) {
             std::cout << ttl << "  ";
-            fflush(stdout);
 
             double rtt = 0.0;
-            std::string hopAddr;
             uint16_t seq = ttl;
 
             if (!sendEcho(seq, ttl)) {
                 std::cout << "Send error\n";
                 continue;
             }
-            auto send_time = std::chrono::high_resolution_clock::now();
 
-            int result = receiveReply(rtt, hopAddr, send_time);
+            std::string hopAddr;
+            long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+            int result = receiveEcho(rtt, hopAddr, send_time);
 
             if (result == 1) {
                 std::cout << "* (timeout)\n";
@@ -224,6 +263,8 @@ int main(int argc, char* argv[]) {
     int maxHops = 30;
     int timeout = 1000;
     bool verbose = false;
+    int payloadSize = 32;
+    int buffsize = 1024;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -231,13 +272,17 @@ int main(int argc, char* argv[]) {
             maxHops = std::stoi(argv[++i]);
         else if (arg == "--timeout" && i + 1 < argc)
             timeout = std::stoi(argv[++i]);
+        else if (arg == "--payloadSize" && i + 1 < argc)
+            payloadSize = std::stoi(argv[++i]);
+        else if (arg == "--buffsize" && i + 1 < argc)
+            buffsize = std::stoi(argv[++i]);
         else if (arg == "-v")
             verbose = true;
         else if (arg[0] != '-')
             address = arg;
     }
 
-    ICMPTraceroute tracer(address, maxHops, timeout, verbose);
+    ICMPTraceroute tracer(address, maxHops, timeout, payloadSize, buffsize, verbose);
     tracer.run();
 
     return 0;

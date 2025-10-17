@@ -5,7 +5,7 @@ mkdir build
 cd build
 cmake ..
 cmake --build .
-sudo ./icmp_Traceroute
+sudo ./icmp_traceroute
 ```
 
 - if Release

@@ -156,7 +156,7 @@ private:
     }
 
     // Send echo request
-    bool sendEcho(uint16_t seq) {
+    int sendEcho(uint16_t seq) {
         std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize); //Allocate buffer
         buildPacket(buf.data(), seq);
         ssize_t sent = sendto(
@@ -200,7 +200,6 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
         std::cout << "Ping " << seq << " Select error" << std::endl;
         return 1;
     }
-    if (rv <= 0) return 1; // 0 -> timeout, 0< -> error
 
     // recive data and sender info
     ssize_t n = recvfrom(this->sock, buf.data(), buf.size(), 0, (sockaddr*)&from, &addrlen);
@@ -225,7 +224,7 @@ int receiveEcho(uint16_t seq, int& rtt_ms) {
         rtt_ms = int((now - ts_sent) / 1000);
 
         return 0;
-    } else { // Handel timeouts and erros
+    } else { // Handel timeouts and errors
         switch (icmp->type) {
             case ICMP_DEST_UNREACH: {
                 std::string reason;
