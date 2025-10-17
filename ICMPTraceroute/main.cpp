@@ -1,18 +1,17 @@
 /*
  * Usage: ./icmp_traceroute [address] [-v] [--maxhops <n>] [--timeout <ms>] [--payloadSize <bytes>] [--buffsize <bytes>]
  * Example: sudo ./icmp_traceroute 8.8.8.8 -v --maxhops 30 --timeout 1000 --payloadSize 56 --buffsize 1024
- * Example: sudo ./icmp_traceroute 8.8.8.8 -v --maxhops 30 --timeout 1000 --payloadSize 56 --buffsize 1024
  */
 
-#include <iostream>
-#include <vector>
-#include <chrono>
-#include <cstring>
-#include <netinet/ip_icmp.h>
-#include <netinet/ip.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <netdb.h>
+#include <iostream>  // output (cout, cin)
+#include <vector> // std::vector
+#include <chrono> // std::chrono for time
+#include <cstring> // strings
+#include <netinet/ip_icmp.h> // ICMP struct
+#include <netinet/in.h> // socket struct and utils (sockaddr_in)
+#include <arpa/inet.h> // inet_pton()
+#include <unistd.h> // posix close(), read(), write()
+#include <netdb.h> // for gethostbyname()
 
 class ICMPTraceroute {
 private:
@@ -265,6 +264,12 @@ int main(int argc, char* argv[]) {
     bool verbose = false;
     int payloadSize = 32;
     int buffsize = 1024;
+
+    if (argc < 2)
+    {
+        std::cerr << "Usage: " << argv[0] << " [address] [-v] [--maxhops <n>] [--timeout <ms>] [--payloadSize <bytes>] [--buffsize <bytes>]" << std::endl;
+        return 1;
+    }
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];

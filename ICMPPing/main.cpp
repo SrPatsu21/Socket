@@ -302,6 +302,12 @@ int main(int argc, char** argv) {
     int timeoutMs = 1000;
     int payloadSize = 56;
 
+    if (argc < 2)
+    {
+        std::cerr << "Usage: " << argv[0] << " [address] [-v] [--buffsize <bytes>] [--pingtimes <n>] [--timeout <ms>] [--payload <bytes>]" << std::endl;
+        return 1;
+    }
+
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
