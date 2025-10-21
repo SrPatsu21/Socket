@@ -101,7 +101,7 @@ public:
 
 
         this->serverAddress.sin_family = AF_INET; // IPv4
-        this->serverAddress.sin_port = htons(port); // Host to Network Short (host byte order to network byte order)
+        this->serverAddress.sin_port = htons(this->port); // Host to Network Short (host byte order to network byte order)
 
         // Set IP to listen
         if (inet_pton(AF_INET, this->address.c_str(), &this->serverAddress.sin_addr) <= 0) {
@@ -117,33 +117,34 @@ public:
     void receiveHandler() {
         this->buffer = new char[this->buffsize]; // dynamic buffer
 
-        socklen_t serverLen = sizeof(serverAddress);
+        socklen_t serverLen = sizeof(this->serverAddress);
 
+        // recvfrom() waits for a UDP packet and fills buffer + client info
         while (this->running) {
-            memset(buffer, 0, this->buffsize);
+            memset(this->buffer, 0, this->buffsize);
             ssize_t bytesReceived = recvfrom(
                 this->clientSocket,
                 this->buffer,
-                sizeof(this->buffer) - 1,
-                0,
-                (struct sockaddr *)&this->serverAddress,
-                &serverLen
+                sizeof(this->buffer) - 1, // Leave space for null terminator '\0'
+                0, // Optional flags (MSG_DONTWAIT for non-blocking)
+                (struct sockaddr *)&this->serverAddress, // Pointer to a structure that will be filled with the sender's (server's) IP address and port
+                &serverLen //size of the server's address structure
             );
 
             if (bytesReceived < 0) {
                 std::cerr << "Error receiving data." << std::endl;
             } else {
-                buffer[bytesReceived] = '\0';
-                std::string msg(buffer);
+                this->buffer[bytesReceived] = '\0';
+                std::string msg(this->buffer);
 
                 if (msg.rfind("Heartbeat", 0) == 0) {
                     std::cout << "Heartbeat reply " << msg << std::endl;
                 }else if (msg.rfind("Ping", 0) == 0) {
                     {
-                        std::unique_lock<std::mutex> lock(mtx);
-                        waitingPing = false;
+                        std::unique_lock<std::mutex> lock(this->mtx);
+                        this->waitingPing = false;
                     }
-                    cv.notify_all(); // release ping loop
+                    this->cv.notify_all(); // release ping loop
                 }
             }
         }
@@ -225,7 +226,7 @@ public:
                     std::this_thread::sleep_for(std::chrono::milliseconds(500)); // interval between pings
                 }
             }
-            std::cout << "\nPing test complete: " << pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
+            std::cout << "\nPing test complete: " << this->pingTimes - lostCount << " received, " << lostCount << " lost (" << (100.0 * lostCount / pingTimes) << "% loss)" << std::endl;
             std::cout << "Max latency:" << maxRTT << " Min latency:" << minRTT << " average latency:" << (averageRTT/(this->pingTimes-lostCount)) << std::endl;
         }).detach();
     }

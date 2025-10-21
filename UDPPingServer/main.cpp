@@ -59,7 +59,7 @@ public:
     };
 
     void displayInfo(){
-        if (verbose) {
+        if (this->verbose) {
             std::cout << "=== UDP SERVER CONFIG ===" << std::endl;
             std::cout << "Address: " << address << std::endl;
             std::cout << "Port: " << port << std::endl;
@@ -86,7 +86,7 @@ public:
         memset(&this->serverAddress, 0, sizeof(this->serverAddress)); // Clear structure memory
 
         this->serverAddress.sin_family = AF_INET; // IPv4
-        this->serverAddress.sin_port = htons(port); // Host to Network Short (host byte order to network byte order)
+        this->serverAddress.sin_port = htons(this->port); // Host to Network Short (host byte order to network byte order)
 
         // Set network interface to listen
         if (inet_pton(AF_INET, this->address.c_str(), &this->serverAddress.sin_addr) <= 0) {
@@ -114,7 +114,7 @@ public:
         socklen_t clientAddressLen = sizeof(clientAddress);
 
         // init heartbeat monitor
-        if (heartbeatEnabled) {
+        if (this->heartbeatEnabled) {
             startHeartbeatMonitor();
         }
 
@@ -123,13 +123,13 @@ public:
 
         //* Main receive loop
         while (true) {
-            memset(buffer, 0, buffsize); // Clear buffer before receiving new data
+            memset(this->buffer, 0, this->buffsize); // Clear buffer before receiving new data
 
             // recvfrom() waits for a UDP packet and fills buffer + client info
             ssize_t bytesReceived = recvfrom(
-                serverSocket,
-                buffer,
-                buffsize - 1, // Leave space for null terminator '\0'
+                this->serverSocket,
+                this->buffer,
+                this->buffsize - 1, // Leave space for null terminator '\0'
                 0, // Optional flags (MSG_DONTWAIT for non-blocking)
                 (struct sockaddr*)&clientAddress, // Pointer to a structure that will be filled with the sender's (client's) IP address and port
                 &clientAddressLen //size of the client's address structure
@@ -139,16 +139,16 @@ public:
                 std::cerr << "Error receiving data." << std::endl;
             }else
             {
-                buffer[bytesReceived] = '\0';
+                this->buffer[bytesReceived] = '\0';
 
                 // Simulate network error (packet loss)
                 int randomValue = rand() % 100;
 
-                if (randomValue < netErrorPercent) {
+                if (randomValue < this->netErrorPercent) {
                     if (verbose) std::cout << "Simulated packet loss for message: " << buffer << std::endl;
                 }else
                 {
-                    std::string message(buffer);
+                    std::string message(this->buffer);
                     if (this->verbose) std::cout << "Message from client: " << message << std::endl;
 
                     // send a response back to client
@@ -167,7 +167,7 @@ public:
                     }
 
                     sendto(
-                        serverSocket,
+                        this->serverSocket,
                         response, // Response data
                         strlen(response), // Number of bytes to send
                         0, // Flags
@@ -183,7 +183,7 @@ public:
         return "Ping reply";
     }
     void startHeartbeatMonitor() {
-        if (!heartbeatEnabled) return;
+        if (!this->heartbeatEnabled) return;
 
         std::thread([this]() {
             while (true) {

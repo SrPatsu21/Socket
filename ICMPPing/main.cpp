@@ -74,7 +74,7 @@ public:
         this->sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
         // Verify if socket was created
-        if (sock < 0) {
+        if (this->sock < 0) {
             std::cerr << "Error: failed to create socket." << std::endl << "May requires root privileges.";
             return 1;
         }
