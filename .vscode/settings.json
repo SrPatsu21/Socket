@@ -1,4 +1,7 @@
 {
+    "editor.fontFamily": "Fira Code",
+    "editor.fontLigatures": true,
+    "editor.fontWeight": "400",
     "files.associations": {
         "cstring": "cpp",
         "iostream": "cpp",
@@ -61,6 +64,7 @@
         "condition_variable": "cpp",
         "cerrno": "cpp",
         "csignal": "cpp",
-        "mutex": "cpp"
+        "mutex": "cpp",
+        "cinttypes": "cpp"
     }
 }

@@ -21,7 +21,16 @@ set(SOURCES
     main.cpp
 )
 
-set(EXECUTABLE_OUTPUT_NAME "${PROJECT_NAME}")
+find_package(OpenSSL REQUIRED)
+if(OPENSSL_FOUND)
+    message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
+    message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
+else()
+    message(FATAL_ERROR "OpenSSL not found!")
+endif()
 
 add_executable(${PROJECT_NAME} ${SOURCES})
-set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${EXECUTABLE_OUTPUT_NAME}")
+
+# Adicione estas duas linhas ↓↓↓
+target_include_directories(${PROJECT_NAME} PRIVATE ${OPENSSL_INCLUDE_DIR})
+target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
