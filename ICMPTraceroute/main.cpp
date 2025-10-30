@@ -222,7 +222,7 @@ private:
     }
 
 public:
-    void run() {
+    int run() {
         createSocket();
         std::cout << "Tracing route to " << this->address << " (" << inet_ntoa(this->dest.sin_addr) << "), max " << this->maxHops << " hops\n";
 
@@ -250,7 +250,6 @@ public:
                 in_addr addrStruct{};
                 if (inet_pton(AF_INET, hopAddr.c_str(), &addrStruct) != 1) {
                     std::cout << hopAddr << "  " << rtt << " ms\n";
-                    continue;
                 }
 
                 hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
@@ -262,15 +261,17 @@ public:
                     hopName = hopAddr;
 
                 std::cout << hopName << " (" << hopAddr << ")  " << rtt << " ms";
-                if (result == 0)
-                    std::cout << "  [destination reached]";
-                std::cout << "\n";
-
-                if (result == 0) break;
+                if (result == 0) {
+                    std::cout << "  [destination reached]" << std::endl;
+                    return 0;
+                }
+                std::cout << std::endl;
             } else {
-                std::cout << "Unknown ICMP reply\n";
+                std::cout << "Unknown ICMP reply" << std::endl;
+                return 1;
             }
         }
+        return 1;
     }
 };
 
@@ -305,7 +306,5 @@ int main(int argc, char* argv[]) {
     }
 
     ICMPTraceroute tracer(address, maxHops, timeout, payloadSize, buffsize, verbose);
-    tracer.run();
-
-    return 0;
+    return tracer.run();
 }
