@@ -17,7 +17,7 @@
 #include <chrono> // std::chrono for time
 #include <atomic> // atomic types ensure safe access in multithreaded
 
-class SMTPSocketClient
+class UDPSocketClient
 {
 private:
     int port;
@@ -42,7 +42,7 @@ private:
     std::mutex mtx;
     std::condition_variable cv;
 public:
-    SMTPSocketClient(
+    UDPSocketClient(
         int port,
         std::string address = "127.0.0.1",
         bool verbose = false,
@@ -232,7 +232,7 @@ public:
     }
 
     int run() {
-        std::thread receiver(&SMTPSocketClient::receiveHandler, this);
+        std::thread receiver(&UDPSocketClient::receiveHandler, this);
         if (this->heartbeatEnabled) startHeartbeatLoop();
         if (this->pingEnabled) startPingLoop();
 
@@ -240,7 +240,7 @@ public:
         return 1;
     }
 
-    ~SMTPSocketClient(){
+    ~UDPSocketClient(){
         cleanup();
     };
 
@@ -296,7 +296,7 @@ int main(int argc, char *argv[])
             address = arg;
     }
 
-    SMTPSocketClient client( port, address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs);
+    UDPSocketClient client( port, address, verbose, buffsize, pingTimes, timeoutMs, pingEnabled, heartbeatEnabled, heartbeatMs);
 
     if (client.createSocket() != 0) return 1;
 
