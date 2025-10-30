@@ -245,11 +245,28 @@ public:
                 std::cout << "* (timeout)\n";
             } else if (result == 2) {
                 std::cout << "Socket error\n";
-            } else if (result == 3) {
-                std::cout << hopAddr << "  " << rtt << " ms\n";
-            } else if (result == 0) {
-                std::cout << hopAddr << "  " << rtt << " ms  [destination reached]\n";
-                break;
+            } else if (result == 3 || result == 0) {
+                // resolve host name from hopAddr string
+                in_addr addrStruct{};
+                if (inet_pton(AF_INET, hopAddr.c_str(), &addrStruct) != 1) {
+                    std::cout << hopAddr << "  " << rtt << " ms\n";
+                    continue;
+                }
+
+                hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
+                std::string hopName;
+
+                if (hopHost && hopHost->h_name)
+                    hopName = hopHost->h_name;
+                else
+                    hopName = hopAddr;
+
+                std::cout << hopName << " (" << hopAddr << ")  " << rtt << " ms";
+                if (result == 0)
+                    std::cout << "  [destination reached]";
+                std::cout << "\n";
+
+                if (result == 0) break;
             } else {
                 std::cout << "Unknown ICMP reply\n";
             }

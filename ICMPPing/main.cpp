@@ -75,7 +75,7 @@ public:
 
         // Verify if socket was created
         if (this->sock < 0) {
-            std::cerr << "Error: failed to create socket." << std::endl << "May requires root privileges.";
+            std::cerr << "Error: failed to create socket." << std::endl << "May require root privileges.";
             return 1;
         }
 
