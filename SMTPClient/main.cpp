@@ -197,7 +197,6 @@ public:
         // AF_INET → IPv4
         // SOCK_DGRAM → UDP protocol (unlike SOCK_STREAM for TCP)
         // 0 → choose default protocol for UDP            std::cout << "=== SMTP CLIENT CONFIG ===" << std::endl;
-
         this->clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
         // Verify if socket was created

@@ -125,7 +125,7 @@ public:
             ssize_t bytesReceived = recvfrom(
                 this->clientSocket,
                 this->buffer,
-                sizeof(this->buffer) - 1, // Leave space for null terminator '\0'
+                this->buffsize - 1, // Leave space for null terminator '\0'
                 0, // Optional flags (MSG_DONTWAIT for non-blocking)
                 (struct sockaddr *)&this->serverAddress, // Pointer to a structure that will be filled with the sender's (server's) IP address and port
                 &serverLen //size of the server's address structure
@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
             heartbeatEnabled = (std::stoi(argv[++i]) != 0);
         else if (arg == "--heartms" && i + 1 < argc)
             heartbeatMs = std::stoi(argv[++i]);
-        else if (address == "127.0.0.1" && arg[0] != '-')
+        else if (address == "0.0.0.0" && arg[0] != '-v')
             address = arg;
     }
 
