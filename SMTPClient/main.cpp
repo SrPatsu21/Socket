@@ -245,17 +245,17 @@ public:
         if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
 
         // STARTTLS if needed (for port 587)
-        if (port == 587) {
+        if (this->port == 587) {
             if (sendCommand("STARTTLS\r\n")) return 1;
             if (startTLS()) return 1;
             if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
         }
 
         // Authentication (required by Gmail)
-        if (!username.empty() && !password.empty()) {
+        if (!this->username.empty() && !this->password.empty()) {
             if (sendCommand("AUTH LOGIN\r\n")) return 1;
-            if (sendCommand(base64Encode(username) + "\r\n")) return 1;
-            if (sendCommand(base64Encode(password) + "\r\n")) return 1;
+            if (sendCommand(base64Encode(this->username) + "\r\n")) return 1;
+            if (sendCommand(base64Encode(this->password) + "\r\n")) return 1;
         }
 
         // MAIL FROM
