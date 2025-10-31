@@ -16,6 +16,7 @@
 #include <vector> // std::vector
 #include <atomic> // atomic types ensure safe access in multithreaded
 #include <netdb.h> // for gethostbyname()
+#include <thread> // std::thread for for sleep
 
 class ICMPPing {
 private:
@@ -275,6 +276,7 @@ public:
                 if (rtt < minRTT) minRTT = rtt;
                 if (rtt > maxRTT) maxRTT = rtt;
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
         std::cout << std::endl << "Ping finished. Lost: " << lostCount << "/" << this->pingTimes << " (" << 100.0 * lostCount / this->pingTimes << "%)" << std::endl;

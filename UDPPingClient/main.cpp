@@ -140,6 +140,7 @@ public:
                 if (msg.rfind("Heartbeat", 0) == 0) {
                     std::cout << "Heartbeat reply " << msg << std::endl;
                 }else if (msg.rfind("Ping", 0) == 0) {
+                    std::cout << "Ping reply " << msg << std::endl;
                     {
                         std::unique_lock<std::mutex> lock(this->mtx);
                         this->waitingPing = false;
