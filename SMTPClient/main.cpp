@@ -1,16 +1,16 @@
 /*
- * Usage: ./smtp_client <port> <server_url> <from_email> <app_password> <to_email> <subject> <body> [-v] [--buffsize <bytes>]
- * Example: ./smtp_client 587 smtp.gmail.com sender@gmail.com your_app_password recipient@gmail.com "Hello" "This is a test." -v --buffsize 2048
+ * Usage: ./smtp_client <port> <server_url> <from_email> <app_password> <to_email> <subject> <body> [-v] [--buffsize <bytes>] [--attach <filepath>]
+ * Example: ./smtp_client 587 smtp.gmail.com sender@gmail.com your_app_password recipient@gmail.com "Hello" "This is a test." --attach ./file.txt -v
  * Example: ./smtp_client 25 mail.example.com sender@example.com pass123 recipient@example.com "Hi" "Body text" -v --buffsize 1024
  *
  * NOTES:
  *  - For Gmail: use port 587 (STARTTLS) or 465 (implicit SSL)
  *  - Gmail requires an App Password if 2FA is enabled
  *  - Compile with: g++ main.cpp -o smtp_client -lssl -lcrypto
- *  - This program uses OpenSSL for TLS/SSL and Base64 encoding
  */
 
 #include <cstring> // strings
+#include <vector>
 #include <iostream> // output (cout, cin)
 #include <netinet/in.h> // socket struct and utils (sockaddr_in)
 #include <sys/socket.h> // create socket
@@ -19,10 +19,12 @@
 #include <netdb.h> // resolve hostname
 #include <string> // more string utils
 #include <cerrno> // print message immediately - unbuffered
+#include <fstream>
 #include <openssl/ssl.h> // TLS/SSL
 #include <openssl/err.h> // TLS/SSL errors
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
+#include <map>
 
 // Encode a string into Base64 using OpenSSL
 std::string base64Encode(const std::string &input) {
@@ -40,6 +42,55 @@ std::string base64Encode(const std::string &input) {
     return encoded;
 }
 
+// Encode a file into Base64 using OpenSSL
+std::string readFileBase64(const std::string &path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error: cannot open file " << path << std::endl;
+        return "";
+    }
+    std::string data(
+        (std::istreambuf_iterator<char>(file)), // begin iterator: reads bytes from the file stream
+        std::istreambuf_iterator<char>() // end iterator: default-constructed = "end of stream"
+    );
+    return base64Encode(data);
+}
+
+// Very extension → MIME type mapping
+std::string getMimeType(const std::string &filename) {
+    static const std::map<std::string, std::string> mimeTypes = {
+        {".txt", "text/plain"},
+        {".html", "text/html"},
+        {".htm", "text/html"},
+        {".jpg", "image/jpeg"},
+        {".jpeg", "image/jpeg"},
+        {".png", "image/png"},
+        {".gif", "image/gif"},
+        {".pdf", "application/pdf"},
+        {".csv", "text/csv"},
+        {".json", "application/json"},
+        {".xml", "application/xml"},
+        {".mp3", "audio/mpeg"},
+        {".mp4", "video/mp4"},
+        {".zip", "application/zip"},
+        {".rar", "application/vnd.rar"},
+        {".7z", "application/x-7z-compressed"}
+    };
+
+    size_t dot = filename.find_last_of('.');
+    if (dot != std::string::npos) {
+        std::string ext = filename.substr(dot);
+        auto it = mimeTypes.find(ext);
+        if (it != mimeTypes.end()) {
+            return it->second;
+        }
+    }
+
+    // Default for unknown types
+    return "application/octet-stream";
+}
+
+
 class SMTPSocketClient
 {
 private:
@@ -49,6 +100,7 @@ private:
     std::string to;
     std::string subject;
     std::string body;
+    std::vector<std::string> attachments;
     bool verbose;
     int buffsize;
 
@@ -120,7 +172,6 @@ private:
         }
     }
 
-
     // TLS handshake
     int startTLS() {
         if (this->verbose) std::cout << "Starting TLS handshake...\n";
@@ -135,17 +186,14 @@ private:
             return 1;
         }
 
-        if (!SSL_set_tlsext_host_name(this->ssl, this->address.c_str())) {
+        if (!SSL_set_tlsext_host_name(this->ssl, this->address.c_str()))
             std::cerr << "Warning: cannot set SNI\n";
-        }
-
         // Print the cipher being used for encryption
-        if (this->verbose) std::cout << "[+] TLS connection established using " << SSL_get_cipher(ssl) << "\n"; 
+        if (this->verbose) std::cout << "[+] TLS connection established using " << SSL_get_cipher(ssl) << "\n";
 
         this->useTLS = true;
         return 0;
-}
-
+    }
 
 public:
     SMTPSocketClient(
@@ -156,6 +204,7 @@ public:
         std::string &to,
         std::string &subject,
         std::string &body,
+        std::vector<std::string> &attachments,
         bool verbose = false,
         int buffsize = 1024
     ) :
@@ -165,6 +214,7 @@ public:
         to(to),
         subject(subject),
         body(body),
+        attachments(attachments),
         verbose(verbose),
         buffsize(buffsize),
         clientSocket(-1)
@@ -186,6 +236,13 @@ public:
             std::cout << "Port: " << port << std::endl;
             std::cout << "From: " << from << std::endl;
             std::cout << "To: " << to << std::endl;
+            if (attachments.empty())
+                std::cout << "Attachments: (none)" << std::endl;
+            else {
+                std::cout << "Attachments:" << std::endl;
+                for (const auto &a : attachments)
+                    std::cout << "  - " << a << std::endl;
+            }
             std::cout << "Buffer size: " << buffsize << " bytes" << std::endl;
             std::cout << "Verbose mode enabled" << std::endl;
             std::cout << "==========================" << std::endl << std::endl;
@@ -245,17 +302,17 @@ public:
         if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
 
         // STARTTLS if needed (for port 587)
-        if (port == 587) {
+        if (this->port == 587) {
             if (sendCommand("STARTTLS\r\n")) return 1;
             if (startTLS()) return 1;
             if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
         }
 
         // Authentication (required by Gmail)
-        if (!username.empty() && !password.empty()) {
+        if (!this->username.empty() && !this->password.empty()) {
             if (sendCommand("AUTH LOGIN\r\n")) return 1;
-            if (sendCommand(base64Encode(username) + "\r\n")) return 1;
-            if (sendCommand(base64Encode(password) + "\r\n")) return 1;
+            if (sendCommand(base64Encode(this->username) + "\r\n")) return 1;
+            if (sendCommand(base64Encode(this->password) + "\r\n")) return 1;
         }
 
         // MAIL FROM
@@ -271,8 +328,40 @@ public:
         std::string msg = "Subject: " + this->subject + "\r\n";
         msg += "From: <" + this->from + ">\r\n";
         msg += "To: <" + this->to + ">\r\n";
-        msg += "Content-Type: text/plain; charset=utf-8\r\n";
-        msg += "\r\n" + this->body + "\r\n";
+
+        // Create a unique boundary identifier used to separate Multipurpose Internet Mail Extensions(MIME) parts in the email
+        std::string boundary = "----=_Boundary_" + std::to_string(rand());
+
+        // If there's an attachment, build a multipart/mixed message
+        if (!this->attachments.empty()) {
+            // MIME headers to indicate that this email contains multiple parts (text + attachments)
+            msg += "MIME-Version: 1.0\r\n";
+            msg += "Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n";
+
+            // Text part
+            msg += "--" + boundary + "\r\n"; // Start of the first MIME section
+            msg += "Content-Type: text/plain; charset=utf-8\r\n\r\n"; // Defines the content type as plain text
+            msg += this->body + "\r\n\r\n"; // Adds the main message body
+
+            // Attachment file
+            for (const auto &path : attachments) {
+                std::string fileData = readFileBase64(path);
+                std::string filename = path.substr(path.find_last_of("/\\") + 1);
+                std::string mimeType = getMimeType(filename);
+
+                msg += "--" + boundary + "\r\n"; // Start of the second MIME section (attachment)
+                msg += "Content-Type: " + mimeType + "; name=\"" + filename + "\"\r\n"; // Generic binary content type
+                msg += "Content-Transfer-Encoding: base64\r\n"; // Tell the email client the data is Base64 encoded
+                msg += "Content-Disposition: attachment; filename=\"" + filename + "\"\r\n\r\n"; // Marks this section as an attachment and sets its filename
+                msg += fileData + "\r\n"; // Insert the Base64-encoded file content
+            }
+            msg += "--" + boundary + "--\r\n"; // End of the multipart message (final boundary)
+        } else {
+            // If no attachment, send a simple plain-text message
+            msg += "Content-Type: text/plain; charset=utf-8\r\n\r\n";
+            msg += this->body + "\r\n";
+        }
+
         msg += ".\r\n";
 
         std::cout << std::endl << "Message data:" << std::endl << msg << std::endl;
@@ -280,10 +369,6 @@ public:
 
         // verify if starts with "220"
         std::string resp = readResponse();
-        if (resp.rfind("220", 0) != 0) {
-            std::cerr << "STARTTLS failed: " << resp << std::endl;
-            return 1;
-        }
         std::cout << "Server response: " << std::endl << resp << std::endl;
 
         // QUIT
@@ -311,7 +396,7 @@ public:
 int main(int argc, char *argv[])
 {
     if (argc < 8) {
-        std::cerr << "Usage: " << argv[0] << " <port> <server_url> <app_password> <from_email> <to_email> <subject> <body> [-v] [--buffsize <bytes>]" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <port> <server_url> <from_email> <app_password> <to_email> <subject> <body> [-v] [--buffsize <bytes>] [--attach <filepath>]" << std::endl;
         return 1;
     }
 
@@ -327,16 +412,18 @@ int main(int argc, char *argv[])
     //* Optional args
     bool verbose = false;
     int buffsize = 1024;
-
+    std::vector<std::string> attachments;
     //* Resolve args
     for (int i = 8; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-v") verbose = true;
         else if (arg == "--buffsize" && i + 1 < argc)
             buffsize = std::stoi(argv[++i]);
+        else if (arg == "--attach" && i + 1 < argc)
+            attachments.push_back(argv[++i]);
     }
 
-    SMTPSocketClient client(port, server, from, pass, to, subject, body, verbose, buffsize);
+    SMTPSocketClient client(port, server, from, pass, to, subject, body, attachments, verbose, buffsize);
 
     return client.run();
 }

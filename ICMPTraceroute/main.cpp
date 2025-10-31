@@ -150,10 +150,12 @@ private:
 
     // Send echo request
     bool sendEcho(uint16_t seq, int ttl) {
-        std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize); //Allocate buffer
+        std::vector<uint8_t> buf(sizeof(icmphdr) + this->payloadSize); // Allocate buffer
         buildPacket(buf.data(), seq);
 
-        // Set TTL for this hop
+        // Set TTL for this hop (system call to configure socket)
+        // IPPROTO_IP specifies that the option applies to the IP protocol layer
+        // IP_TTL the specific option being set
         if (setsockopt(this->sock, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0) {
             perror("setsockopt TTL");
             return false;
