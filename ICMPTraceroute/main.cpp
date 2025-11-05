@@ -231,48 +231,62 @@ public:
         for (int ttl = 1; ttl <= this->maxHops; ++ttl) {
             std::cout << ttl << "  ";
 
-            double rtt = 0.0;
-            uint16_t seq = ttl;
+            bool gotReply = false;
 
-            if (!sendEcho(seq, ttl)) {
-                std::cout << "Send error\n";
-                continue;
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                double rtt = 0.0;
+                uint16_t seq = ttl;
+
+                if (!sendEcho(seq, ttl)) {
+                    std::cout << "Send error\n";
+                    continue;
+                }
+
+                std::string hopAddr;
+                long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+                int result = receiveEcho(rtt, hopAddr, send_time);
+
+                if (result == 1) {
+                    std::cout << "* (timeout) " << std::flush;
+                } else if (result == 2) {
+                    std::cout << "Socket error\n";
+                    gotReply = true;
+                    attempt = 4;
+                } else if (result == 3 || result == 0) {
+                    // resolve host name from hopAddr string
+                    in_addr addrStruct{};
+                    if (inet_pton(AF_INET, hopAddr.c_str(), &addrStruct) != 1) {
+                        std::cout << hopAddr << "  " << rtt << " ms\n";
+                    }
+
+                    hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
+                    std::string hopName;
+
+                    if (hopHost && hopHost->h_name)
+                        hopName = hopHost->h_name;
+                    else
+                        hopName = hopAddr;
+
+                    std::cout << hopName << " (" << hopAddr << ")  " << rtt << " ms";
+                    if (result == 0) {
+                        std::cout << "  [destination reached]" << std::endl;
+                        return 0;
+                    }
+                    gotReply = true;
+                    attempt = 4;
+                } else {
+                    std::cout << "Unknown ICMP reply" << std::endl;
+                    return 1;
+                }
             }
 
-            std::string hopAddr;
-            long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-            int result = receiveEcho(rtt, hopAddr, send_time);
-
-            if (result == 1) {
-                std::cout << "* (timeout)\n";
-            } else if (result == 2) {
-                std::cout << "Socket error\n";
-            } else if (result == 3 || result == 0) {
-                // resolve host name from hopAddr string
-                in_addr addrStruct{};
-                if (inet_pton(AF_INET, hopAddr.c_str(), &addrStruct) != 1) {
-                    std::cout << hopAddr << "  " << rtt << " ms\n";
-                }
-
-                hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
-                std::string hopName;
-
-                if (hopHost && hopHost->h_name)
-                    hopName = hopHost->h_name;
-                else
-                    hopName = hopAddr;
-
-                std::cout << hopName << " (" << hopAddr << ")  " << rtt << " ms";
-                if (result == 0) {
-                    std::cout << "  [destination reached]" << std::endl;
-                    return 0;
-                }
-                std::cout << std::endl;
+            if (!gotReply) {
+                std::cout << "(timeout x3)" << std::endl;
             } else {
-                std::cout << "Unknown ICMP reply" << std::endl;
-                return 1;
+                std::cout << std::endl;
             }
         }
+
         return 1;
     }
 };
