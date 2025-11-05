@@ -90,7 +90,6 @@ std::string getMimeType(const std::string &filename) {
     return "application/octet-stream";
 }
 
-
 class SMTPSocketClient
 {
 private:
@@ -152,13 +151,29 @@ private:
         return 0;
     }
 
-    int sendCommand(const std::string &cmd) {
-        if (this->verbose) std::cout << "C: " << cmd;
-        if (sendAll(cmd)) return 1;
-        std::string reply = readResponse();
-        std::cout << "S: " << reply;
-        return 0;
-    }
+    std::string sendCommand(const std::string &cmd) {
+        std::string reply;
+        if (this->verbose) std::cout << "\033[1;32mClient: " << cmd << "\033[0m";
+        if (sendAll(cmd)) return reply;
+        reply = readResponse();
+        std::cout << "\033[1;31mServer: " << reply << "\033[0m";
+        // Verify SMTP reply code
+        if (reply.size() >= 3 && isdigit(reply[0]) && isdigit(reply[1]) && isdigit(reply[2])) {
+            int code = std::stoi(reply.substr(0, 3));
+            // 2xx = success
+            // 3xx = continuation
+            if (code < 200 || code >= 400) {
+                std::cerr << "SMTP error: server returned code " << code << " for command: " << cmd;
+                reply.clear(); // indicate failure
+            }
+        } else {
+            std::cerr << "Invalid SMTP response: " << reply;
+            reply.clear();
+        }
+
+        return reply;
+}
+
 
     void initTLS() {
         SSL_library_init(); // Init lib
@@ -175,7 +190,7 @@ private:
     // TLS handshake
     int startTLS() {
         if (this->verbose) std::cout << "Starting TLS handshake...\n";
-        initTLS(); // Initialize OpenSSL context and algorithms
+        initTLS(); // Initialize OpenSSL context in client mode
         this->ssl = SSL_new(this->ctx); // Create (Secure Sockets Layer) object for this connection
 
         SSL_set_fd(this->ssl, this->clientSocket); // Attach the existing TCP socket to SSL
@@ -253,7 +268,7 @@ public:
         //* Create socket
         // AF_INET → IPv4
         // SOCK_DGRAM → UDP protocol (unlike SOCK_STREAM for TCP)
-        // 0 → choose default protocol for UDP            std::cout << "=== SMTP CLIENT CONFIG ===" << std::endl;
+        // 0 → choose default protocol for TCP            std::cout << "=== SMTP CLIENT CONFIG ===" << std::endl;
         this->clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
         // Verify if socket was created
@@ -299,41 +314,55 @@ public:
         if (createSocket()) return 1;
 
         std::cout << "Init communication" << std::endl;
-        if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
+
+        // First, basic HELO to verify the service is responsive
+        std::string reply = sendCommand(std::string("HELO ") + this->address + "\r\n");
+        if (reply.empty()) return 1;
+
+        // Extended HELO is the modern version introduced by the ESMTP
+        reply = sendCommand(std::string("EHLO ") + this->address + "\r\n");
+        if (reply.empty()) return 1;
+
+        // Check if STARTTLS is supported
+        bool supportsTLS = reply.find("STARTTLS") != std::string::npos;
 
         // STARTTLS if needed (for port 587)
-        if (this->port == 587) {
-            if (sendCommand("STARTTLS\r\n")) return 1;
+        if (this->port == 587 && supportsTLS) {
+            if (sendCommand("STARTTLS\r\n").empty()) return 1;
             if (startTLS()) return 1;
-            if (sendCommand(std::string("EHLO ") + this->address + "\r\n")) return 1;
+            reply = sendCommand(std::string("EHLO ") + this->address + "\r\n");
+            if (reply.empty()) return 1;
         }
 
+        // Check if AUTH is supported
+        bool supportsAuth = reply.find("AUTH") != std::string::npos;
+
         // Authentication (required by Gmail)
-        if (!this->username.empty() && !this->password.empty()) {
-            if (sendCommand("AUTH LOGIN\r\n")) return 1;
-            if (sendCommand(base64Encode(this->username) + "\r\n")) return 1;
-            if (sendCommand(base64Encode(this->password) + "\r\n")) return 1;
+        if (!this->username.empty() && !this->password.empty() && supportsAuth) {
+            if (sendCommand("AUTH LOGIN\r\n").empty()) return 1;
+            if (sendCommand(base64Encode(this->username) + "\r\n").empty()) return 1;
+            if (sendCommand(base64Encode(this->password) + "\r\n").empty()) return 1;
         }
 
         // MAIL FROM
-        if (sendCommand("MAIL FROM:<" + this->from + ">\r\n")) return 1;
+        if (sendCommand("MAIL FROM:<" + this->from + ">\r\n").empty()) return 1;
 
         // RCPT TO
-        if (sendCommand("RCPT TO:<" + this->to + ">\r\n")) return 1;
+        if (sendCommand("RCPT TO:<" + this->to + ">\r\n").empty()) return 1;
 
         // DATA
-        if (sendCommand("DATA\r\n")) return 1;
+        if (sendCommand("DATA\r\n").empty()) return 1;
 
         // Message headers + body
         std::string msg = "Subject: " + this->subject + "\r\n";
         msg += "From: <" + this->from + ">\r\n";
         msg += "To: <" + this->to + ">\r\n";
 
-        // Create a unique boundary identifier used to separate Multipurpose Internet Mail Extensions(MIME) parts in the email
-        std::string boundary = "----=_Boundary_" + std::to_string(rand());
-
         // If there's an attachment, build a multipart/mixed message
         if (!this->attachments.empty()) {
+            // Create a unique boundary identifier used to separate Multipurpose Internet Mail Extensions(MIME) parts in the email
+            std::string boundary = "----=_Boundary_" + std::to_string(rand());
+
             // MIME headers to indicate that this email contains multiple parts (text + attachments)
             msg += "MIME-Version: 1.0\r\n";
             msg += "Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n";
@@ -364,15 +393,15 @@ public:
 
         msg += ".\r\n";
 
-        std::cout << std::endl << "Message data:" << std::endl << msg << std::endl;
+        std::cout << std::endl << "\033[1;32mClient Message data:" << msg << "\033[0m" << std::endl;
         if (sendAll(msg)) return 1;
 
         // verify if starts with "220"
         std::string resp = readResponse();
-        std::cout << "Server response: " << std::endl << resp << std::endl;
+        std::cout << "\033[1;31mServer response: " << resp << "\033[0m" << std::endl;
 
         // QUIT
-        if (sendCommand("QUIT\r\n")) return 1;
+        if (sendCommand("QUIT\r\n").empty()) return 1;
 
         return 0;
     }
