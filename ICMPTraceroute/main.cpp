@@ -12,6 +12,7 @@
 #include <arpa/inet.h> // inet_pton()
 #include <unistd.h> // posix close(), read(), write()
 #include <netdb.h> // for gethostbyname()
+#include <iomanip> //setw
 
 class ICMPTraceroute {
 private:
@@ -229,64 +230,65 @@ public:
         std::cout << "Tracing route to " << this->address << " (" << inet_ntoa(this->dest.sin_addr) << "), max " << this->maxHops << " hops\n";
 
         for (int ttl = 1; ttl <= this->maxHops; ++ttl) {
-            std::cout << ttl << "  ";
+            std::cout << std::setw(2) << ttl << "  " << std::flush;
 
+            std::vector<std::string> results;
+            std::string hopAddr;
             bool gotReply = false;
+            bool destinationReached = false;
 
             for (int attempt = 1; attempt <= 3; ++attempt) {
                 double rtt = 0.0;
-                uint16_t seq = ttl;
+                uint16_t seq = (ttl - 1) * 3 + attempt;
 
                 if (!sendEcho(seq, ttl)) {
-                    std::cout << "Send error\n";
+                    results.push_back("senderr");
                     continue;
                 }
-
-                std::string hopAddr;
                 long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+
                 int result = receiveEcho(rtt, hopAddr, send_time);
 
                 if (result == 1) {
-                    std::cout << "* (timeout) " << std::flush;
+                    results.push_back("*"); // timeout
                 } else if (result == 2) {
-                    std::cout << "Socket error\n";
+                    results.push_back("sockerr");
                     gotReply = true;
-                    attempt = 4;
                 } else if (result == 3 || result == 0) {
-                    // resolve host name from hopAddr string
-                    in_addr addrStruct{};
-                    if (inet_pton(AF_INET, hopAddr.c_str(), &addrStruct) != 1) {
-                        std::cout << hopAddr << "  " << rtt << " ms\n";
-                    }
-
-                    hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
-                    std::string hopName;
-
-                    if (hopHost && hopHost->h_name)
-                        hopName = hopHost->h_name;
-                    else
-                        hopName = hopAddr;
-
-                    std::cout << hopName << " (" << hopAddr << ")  " << rtt << " ms";
-                    if (result == 0) {
-                        std::cout << "  [destination reached]" << std::endl;
-                        return 0;
-                    }
+                    // got a reply
+                    std::ostringstream oss;
+                    oss << std::fixed << std::setprecision(1) << rtt << " ms";
+                    results.push_back(oss.str());
                     gotReply = true;
-                    attempt = 4;
+                    if (result == 0)
+                        destinationReached = true;
                 } else {
-                    std::cout << "Unknown ICMP reply" << std::endl;
-                    return 1;
+                    results.push_back("?");
                 }
             }
 
-            if (!gotReply) {
-                std::cout << "(timeout x3)" << std::endl;
-            } else {
-                std::cout << std::endl;
-            }
-        }
+            // Print hop info after 3 attempts
+            if (gotReply && !hopAddr.empty()) {
+                in_addr addrStruct{};
+                inet_pton(AF_INET, hopAddr.c_str(), &addrStruct);
 
+                hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
+                std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : hopAddr;
+
+                std::cout << hopName << " (" << hopAddr << ")  ";
+            } else {
+                std::cout << std::setw(0) << std::left << "   ";
+            }
+
+            // Print the 3 results
+            for (const auto& res : results)
+                std::cout << std::setw(8) << res << std::flush;
+
+            std::cout << std::endl;
+
+            if (destinationReached)
+                break;
+    }
         return 1;
     }
 };
