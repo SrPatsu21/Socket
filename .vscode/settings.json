@@ -67,6 +67,7 @@
         "mutex": "cpp",
         "cinttypes": "cpp",
         "map": "cpp",
-        "fstream": "cpp"
+        "fstream": "cpp",
+        "set": "cpp"
     }
 }

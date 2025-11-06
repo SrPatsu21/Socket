@@ -179,7 +179,7 @@ private:
         return true;
     }
 
-    int receiveEcho(double& rtt_ms, std::string& hopAddr, long long send_time) {
+    int receiveEcho(double& rtt_ms, std::string& hopAddr, std::chrono::_V2::steady_clock::time_point send_time) {
         std::vector<uint8_t> buf(this->buffsize); // Alocate buffer
         // Structure to sender address
         sockaddr_in from{};
@@ -208,8 +208,8 @@ private:
         hopAddr = inet_ntoa(from.sin_addr); // address from server
 
         // calc RTT (convert microseconds → milliseconds)
-        long long recv_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-        rtt_ms = double((recv_time - send_time) / 1000);
+        std::chrono::_V2::steady_clock::time_point recv_time = std::chrono::steady_clock::now();
+        rtt_ms = std::chrono::duration<double, std::milli>(recv_time - send_time).count();
 
         // IP header length
         int ihl = reinterpret_cast<iphdr*>(buf.data())->ihl * 4; // get the the IP header structure and ihl ("Internet Header Length") * 4 (IP header is, in units of 32-bit words (4 bytes each) so it converts to bytes)
@@ -251,7 +251,7 @@ public:
                     attemptsResults.push_back({"", 0.0, true});
                     continue;
                 }
-                long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+                std::chrono::_V2::steady_clock::time_point send_time = std::chrono::steady_clock::now();
 
                 int result = receiveEcho(rtt, hopAddr, send_time);
 
@@ -269,7 +269,7 @@ public:
 
             // Group and print by unique address
             std::set<std::string> printed;
-            for (const auto& atm : attemptsResults) {
+            for (auto atm : attemptsResults) {
                 if (atm.timeout){
                 }else if (!atm.addr.empty() && !printed.count(atm.addr)) {
                     in_addr addrStruct{};
@@ -277,20 +277,15 @@ public:
                     hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
                     std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : atm.addr;
 
-                    // if (last != atm)
-                    // {
-                    //     std::cout << "\n\t" << std::flush;
-                    // }
-
                     std::cout << hopName << " (" << atm.addr << ")  ";
                     printed.insert(atm.addr);
                 }
             }
 
             // Print RTTs or timeout
-            for (const auto& atm : attemptsResults) {
+            for (auto atm : attemptsResults) {
                 if (atm.timeout)
-                    std::cout << std::setw(8) << "*" << std::flush;
+                    std::cout << std::setw(8) << "***" << std::flush;
                 else if (atm.addr == "sockerr" || atm.addr == "?")
                     std::cout << std::setw(8) << atm.addr << std::flush;
                 else {
@@ -302,7 +297,10 @@ public:
 
             std::cout << std::endl;
 
-            if (destinationReached) break;
+            if (destinationReached) {
+                std::cout << "[Destination Reached]" << std::endl;
+                break;
+            }
         }
         return 1;
     }
