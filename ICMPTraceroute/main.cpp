@@ -13,6 +13,7 @@
 #include <unistd.h> // posix close(), read(), write()
 #include <netdb.h> // for gethostbyname()
 #include <iomanip> //setw
+#include <set>
 
 class ICMPTraceroute {
 private:
@@ -232,17 +233,22 @@ public:
         for (int ttl = 1; ttl <= this->maxHops; ++ttl) {
             std::cout << std::setw(2) << ttl << "  " << std::flush;
 
-            std::vector<std::string> results;
-            std::string hopAddr;
-            bool gotReply = false;
+            struct ResultsProperties {
+                std::string addr;
+                double rtt;
+                bool timeout;
+            };
+
+            std::vector<ResultsProperties> attemptsResults;
             bool destinationReached = false;
 
             for (int attempt = 1; attempt <= 3; ++attempt) {
                 double rtt = 0.0;
                 uint16_t seq = (ttl - 1) * 3 + attempt;
+                std::string hopAddr;
 
                 if (!sendEcho(seq, ttl)) {
-                    results.push_back("senderr");
+                    attemptsResults.push_back({"", 0.0, true});
                     continue;
                 }
                 long long send_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
@@ -250,45 +256,54 @@ public:
                 int result = receiveEcho(rtt, hopAddr, send_time);
 
                 if (result == 1) {
-                    results.push_back("*"); // timeout
+                    attemptsResults.push_back({"", 0.0, true});
                 } else if (result == 2) {
-                    results.push_back("sockerr");
-                    gotReply = true;
+                    attemptsResults.push_back({"sockerr", 0.0, false});
                 } else if (result == 3 || result == 0) {
-                    // got a reply
-                    std::ostringstream oss;
-                    oss << std::fixed << std::setprecision(1) << rtt << " ms";
-                    results.push_back(oss.str());
-                    gotReply = true;
-                    if (result == 0)
-                        destinationReached = true;
+                    attemptsResults.push_back({hopAddr, rtt, false});
+                    if (result == 0) destinationReached = true;
                 } else {
-                    results.push_back("?");
+                    attemptsResults.push_back({"?", 0.0, false});
                 }
             }
 
-            // Print hop info after 3 attempts
-            if (gotReply && !hopAddr.empty()) {
-                in_addr addrStruct{};
-                inet_pton(AF_INET, hopAddr.c_str(), &addrStruct);
+            // Group and print by unique address
+            std::set<std::string> printed;
+            for (const auto& atm : attemptsResults) {
+                if (atm.timeout){
+                }else if (!atm.addr.empty() && !printed.count(atm.addr)) {
+                    in_addr addrStruct{};
+                    inet_pton(AF_INET, atm.addr.c_str(), &addrStruct);
+                    hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
+                    std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : atm.addr;
 
-                hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
-                std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : hopAddr;
+                    // if (last != atm)
+                    // {
+                    //     std::cout << "\n\t" << std::flush;
+                    // }
 
-                std::cout << hopName << " (" << hopAddr << ")  ";
-            } else {
-                std::cout << std::setw(0) << std::left << "   ";
+                    std::cout << hopName << " (" << atm.addr << ")  ";
+                    printed.insert(atm.addr);
+                }
             }
 
-            // Print the 3 results
-            for (const auto& res : results)
-                std::cout << std::setw(8) << res << std::flush;
+            // Print RTTs or timeout
+            for (const auto& atm : attemptsResults) {
+                if (atm.timeout)
+                    std::cout << std::setw(8) << "*" << std::flush;
+                else if (atm.addr == "sockerr" || atm.addr == "?")
+                    std::cout << std::setw(8) << atm.addr << std::flush;
+                else {
+                    std::ostringstream oss;
+                    oss << std::fixed << std::setprecision(1) << atm.rtt << " ms";
+                    std::cout << std::setw(8) << oss.str() << std::flush;
+                }
+            }
 
             std::cout << std::endl;
 
-            if (destinationReached)
-                break;
-    }
+            if (destinationReached) break;
+        }
         return 1;
     }
 };
