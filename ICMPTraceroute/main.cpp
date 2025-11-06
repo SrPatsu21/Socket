@@ -216,7 +216,6 @@ private:
         // pointer to start of ICMP message
         icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl); // buff pinter + IP legth
 
-        // --- NEW CODE BELOW: Verify ICMP identifier and sequence ---
         uint16_t expected_id = htons(this->pid); // assuming you store your process ID or unique identifier
         uint16_t expected_seq = htons(seq); // assuming you track the sent seq number
         bool match = false;
@@ -242,7 +241,6 @@ private:
         if (!match) {
             return receiveEcho(rtt_ms, hopAddr, send_time, seq); // recursively wait for the correct one
         }
-        // --- END OF NEW CODE ---
 
         if (icmp->type == ICMP_TIME_EXCEEDED) {
             return 3; // hop, but not destination
