@@ -239,7 +239,8 @@ public:
                 bool timeout;
             };
 
-            std::vector<ResultsProperties> attemptsResults;
+            ResultsProperties attemptsResult = {"", 0.0, false};
+            ResultsProperties lastAttempt = {"", 0.0, false};
             bool destinationReached = false;
 
             for (int attempt = 1; attempt <= 3; ++attempt) {
@@ -247,50 +248,42 @@ public:
                 uint16_t seq = (ttl - 1) * 3 + attempt;
                 std::string hopAddr;
 
-                if (!sendEcho(seq, ttl)) {
-                    attemptsResults.push_back({"", 0.0, true});
-                    continue;
-                }
                 std::chrono::_V2::steady_clock::time_point send_time = std::chrono::steady_clock::now();
+                if (!sendEcho(seq, ttl)) continue;
 
                 int result = receiveEcho(rtt, hopAddr, send_time);
 
                 if (result == 1) {
-                    attemptsResults.push_back({"", 0.0, true});
+                    attemptsResult = {"", 0.0, true};
                 } else if (result == 2) {
-                    attemptsResults.push_back({"sockerr", 0.0, false});
+                    attemptsResult = {"sockerr", 0.0, false};
                 } else if (result == 3 || result == 0) {
-                    attemptsResults.push_back({hopAddr, rtt, false});
+                    attemptsResult = {hopAddr, rtt, false};
                     if (result == 0) destinationReached = true;
                 } else {
-                    attemptsResults.push_back({"?", 0.0, false});
+                    attemptsResult = {"?", 0.0, false};
                 }
-            }
 
-            // Group and print by unique address
-            std::set<std::string> printed;
-            for (auto atm : attemptsResults) {
-                if (atm.timeout){
-                }else if (!atm.addr.empty() && !printed.count(atm.addr)) {
+                // print unique address
+                if (attemptsResult.timeout){
+                }else if (!attemptsResult.addr.empty() && attemptsResult.addr != lastAttempt.addr) {
                     in_addr addrStruct{};
-                    inet_pton(AF_INET, atm.addr.c_str(), &addrStruct);
+                    inet_pton(AF_INET, attemptsResult.addr.c_str(), &addrStruct);
                     hostent* hopHost = gethostbyaddr(&addrStruct, sizeof(addrStruct), AF_INET);
-                    std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : atm.addr;
+                    std::string hopName = (hopHost && hopHost->h_name) ? hopHost->h_name : attemptsResult.addr;
 
-                    std::cout << hopName << " (" << atm.addr << ")  ";
-                    printed.insert(atm.addr);
+                    std::cout << hopName << " (" << attemptsResult.addr << ")  ";
+                    lastAttempt.addr = attemptsResult.addr;
                 }
-            }
 
-            // Print RTTs or timeout
-            for (auto atm : attemptsResults) {
-                if (atm.timeout)
+                // Print RTTs or timeout
+                if (attemptsResult.timeout)
                     std::cout << std::setw(8) << "***" << std::flush;
-                else if (atm.addr == "sockerr" || atm.addr == "?")
-                    std::cout << std::setw(8) << atm.addr << std::flush;
+                else if (attemptsResult.addr == "sockerr" || attemptsResult.addr == "?")
+                    std::cout << std::setw(8) << attemptsResult.addr << std::flush;
                 else {
                     std::ostringstream oss;
-                    oss << std::fixed << std::setprecision(1) << atm.rtt << " ms";
+                    oss << std::fixed << std::setprecision(1) << attemptsResult.rtt << " ms";
                     std::cout << std::setw(8) << oss.str() << std::flush;
                 }
             }
