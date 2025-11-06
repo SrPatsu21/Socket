@@ -179,7 +179,7 @@ private:
         return true;
     }
 
-    int receiveEcho(double& rtt_ms, std::string& hopAddr, std::chrono::_V2::steady_clock::time_point send_time) {
+    int receiveEcho(double& rtt_ms, std::string& hopAddr, std::chrono::_V2::steady_clock::time_point send_time, int seq) {
         std::vector<uint8_t> buf(this->buffsize); // Alocate buffer
         // Structure to sender address
         sockaddr_in from{};
@@ -216,6 +216,34 @@ private:
         // pointer to start of ICMP message
         icmphdr* icmp = reinterpret_cast<icmphdr*>(buf.data() + ihl); // buff pinter + IP legth
 
+        // --- NEW CODE BELOW: Verify ICMP identifier and sequence ---
+        uint16_t expected_id = htons(this->pid); // assuming you store your process ID or unique identifier
+        uint16_t expected_seq = htons(seq); // assuming you track the sent seq number
+        bool match = false;
+
+        if (icmp->type == ICMP_ECHOREPLY) {
+            // Direct Echo Reply (final destination)
+            if (icmp->un.echo.id == expected_id && icmp->un.echo.sequence == expected_seq) {
+                match = true;
+            }
+        } else if (icmp->type == ICMP_TIME_EXCEEDED) {
+            // ICMP Time Exceeded contains the original IP header + 8 bytes of original payload
+            iphdr* inner_ip = reinterpret_cast<iphdr*>(buf.data() + ihl + sizeof(icmphdr)); // inner IP header
+            int inner_ihl = inner_ip->ihl * 4;
+            icmphdr* inner_icmp = reinterpret_cast<icmphdr*>(reinterpret_cast<uint8_t*>(inner_ip) + inner_ihl);
+
+            // Match inner ICMP ID and SEQ with what we sent
+            if (inner_icmp->un.echo.id == expected_id && inner_icmp->un.echo.sequence == expected_seq) {
+                match = true;
+            }
+        }
+
+        // If the ICMP message does not belong to us, ignore and wait again
+        if (!match) {
+            return receiveEcho(rtt_ms, hopAddr, send_time, seq); // recursively wait for the correct one
+        }
+        // --- END OF NEW CODE ---
+
         if (icmp->type == ICMP_TIME_EXCEEDED) {
             return 3; // hop, but not destination
         } else if (icmp->type == ICMP_ECHOREPLY) {
@@ -251,7 +279,7 @@ public:
                 std::chrono::_V2::steady_clock::time_point send_time = std::chrono::steady_clock::now();
                 if (!sendEcho(seq, ttl)) continue;
 
-                int result = receiveEcho(rtt, hopAddr, send_time);
+                int result = receiveEcho(rtt, hopAddr, send_time, seq);
 
                 if (result == 1) {
                     attemptsResult = {"", 0.0, true};
