@@ -300,7 +300,6 @@ public:
 
                     std::cout << hopName << " (" << attemptsResult.addr << ")  ";
                     lastAttempt.addr = attemptsResult.addr;
-                    std::cout << "same";
                 }
 
                 // Print RTTs or timeout
